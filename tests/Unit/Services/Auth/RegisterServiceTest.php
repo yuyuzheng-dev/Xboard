@@ -81,13 +81,11 @@ class RegisterServiceTest extends TestCase
             'updated_at' => time(),
         ]);
 
-        $code = InviteCode::create([
-            'user_id' => $inviter->id,
-            'code' => 'INVITE01',
-            'status' => InviteCode::STATUS_UNUSED,
-            'created_at' => time(),
-            'updated_at' => time(),
-        ]);
+        $code = new InviteCode();
+        $code->user_id = $inviter->id;
+        $code->code = 'INVITE01';
+        $code->status = InviteCode::STATUS_UNUSED;
+        $code->saveOrFail();
 
         [$ok, $newUser] = $this->service->register($this->makeRequest([
             'invite_code' => 'INVITE01',
