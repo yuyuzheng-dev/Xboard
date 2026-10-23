@@ -36,6 +36,8 @@ class PasswordResetRevokesTokensTest extends TestCase
     }
     public function test_forget_endpoint_rejects_non_string_codes_and_passwords(): void
     {
+        Cache::flush();
+
         $user = User::create([
             'email' => 'validation-reset@example.com',
             'password' => password_hash('old-password', PASSWORD_DEFAULT),
@@ -62,5 +64,4 @@ class PasswordResetRevokesTokensTest extends TestCase
         $user->refresh();
         $this->assertTrue(password_verify('old-password', $user->password));
     }
-
 }

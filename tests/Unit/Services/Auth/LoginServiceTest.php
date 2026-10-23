@@ -65,8 +65,8 @@ class LoginServiceTest extends TestCase
             'password' => 'new-password',
             'email_code' => false,
         ], [
-            'email' => 'required|email:strict',
-            'password' => 'required|min:8',
+            'email' => 'required|string|email:strict',
+            'password' => 'required|string|min:8',
             'email_code' => 'required|string|digits:6',
         ]);
 
