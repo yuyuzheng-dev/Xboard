@@ -80,7 +80,10 @@ class Plugin extends AbstractPlugin implements PaymentInterface
     public function notify($params): array|bool
     {
         $secret = $this->getConfig('key');
-        if (!is_string($secret) || trim($secret) === '' || !is_array($params)) {
+        $pid = $this->getConfig('pid');
+        if (!is_string($secret) || trim($secret) === ''
+            || (!is_string($pid) && !is_int($pid)) || trim((string) $pid) === ''
+            || !is_array($params)) {
             return false;
         }
         foreach ($params as $value) {
@@ -88,16 +91,25 @@ class Plugin extends AbstractPlugin implements PaymentInterface
                 return false;
             }
         }
-        if (!is_string($params['sign'] ?? null)
-            || !is_string($params['out_trade_no'] ?? null) || trim($params['out_trade_no']) === ''
-            || !is_string($params['trade_no'] ?? null) || trim($params['trade_no']) === '') {
+        foreach (['sign', 'out_trade_no', 'trade_no'] as $field) {
+            if (!is_string($params[$field] ?? null) || trim($params[$field]) === '') {
+                return false;
+            }
+        }
+        if (($params['trade_status'] ?? null) !== 'TRADE_SUCCESS'
+            || (string) ($params['pid'] ?? '') !== (string) $pid
+            || ($params['sign_type'] ?? 'MD5') !== 'MD5') {
             return false;
         }
-        $pid = $this->getConfig('pid');
-        if ((!is_string($pid) && !is_int($pid)) || trim((string) $pid) === ''
-            || (string) ($params['pid'] ?? '') !== (string) $pid
-            || ($params['trade_status'] ?? null) !== 'TRADE_SUCCESS'
-            || ($params['sign_type'] ?? 'MD5') !== 'MD5') {
+
+        // Parse signed decimal yuan exactly to integer cents; do not round floats.
+        $money = $params['money'] ?? null;
+        if ((!is_string($money) && !is_int($money))
+            || !preg_match('/\\A([0-9]{1,10})(?:\\.([0-9]{1,2}))?\\z/', (string) $money, $parts)) {
+            return false;
+        }
+        $paidAmount = (int) $parts[1] * 100 + (int) str_pad($parts[2] ?? '', 2, '0');
+        if ($paidAmount <= 0) {
             return false;
         }
 
@@ -105,14 +117,14 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         unset($params['sign'], $params['sign_type']);
         ksort($params);
         $str = stripslashes(urldecode(http_build_query($params))) . $secret;
-
         if (!hash_equals(md5($str), $sign)) {
             return false;
         }
 
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'paid_amount' => $paidAmount,
         ];
     }
 }

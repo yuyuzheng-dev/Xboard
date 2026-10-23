@@ -12,15 +12,17 @@ class PassportRoute
         $router->group([
             'prefix' => 'passport'
         ], function ($router) {
-            // Auth
+            // Auth: per-IP throttle also covers token exchange and password reset.
+            $router->group(['middleware' => 'throttle:passport'], function ($router) {
             $router->post('/auth/register', [AuthController::class, 'register']);
             $router->post('/auth/login', [AuthController::class, 'login']);
             $router->get('/auth/token2Login', [AuthController::class, 'token2Login']);
             $router->post('/auth/forget', [AuthController::class, 'forget']);
             $router->post('/auth/getQuickLoginUrl', [AuthController::class, 'getQuickLoginUrl']);
             $router->post('/auth/loginWithMailLink', [AuthController::class, 'loginWithMailLink']);
+            });
             // Comm
-            $router->post('/comm/sendEmailVerify', [CommController::class, 'sendEmailVerify']);
+            $router->post('/comm/sendEmailVerify', [CommController::class, 'sendEmailVerify'])->middleware('throttle:email-verify');
             $router->post('/comm/pv', [CommController::class, 'pv']);
         });
     }

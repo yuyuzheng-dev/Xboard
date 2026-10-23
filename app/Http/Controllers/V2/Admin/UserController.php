@@ -27,6 +27,32 @@ class UserController extends Controller
 {
     use QueryOperators;
 
+    // Only simple, known v2_user columns may appear in ORDER BY / WHERE.
+    private const USER_COLUMNS = [
+        'id', 'email', 'uuid', 'token', 'plan_id', 'group_id', 'invite_user_id',
+        'is_admin', 'is_staff', 'banned', 'balance', 'commission_balance',
+        'commission_rate', 'commission_type', 'discount', 'transfer_enable', 'u', 'd',
+        'speed_limit', 'device_limit', 'expired_at', 'created_at', 'updated_at',
+        'last_login_at', 'next_reset_at', 'last_reset_at', 'telegram_id', 'reset_count',
+        'remind_expire', 'remind_traffic', 'parent_id',
+    ];
+
+    private const RELATION_FILTERS = [
+        'plan' => ['id', 'name'],
+        'group' => ['id', 'name'],
+        'invite_user' => ['id', 'email'],
+    ];
+
+    private function safeUserColumn(mixed $field): string
+    {
+        if (!is_string($field) || !in_array($field, self::USER_COLUMNS, true)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'sort' => 'Unsupported user field',
+            ]);
+        }
+        return $field;
+    }
+
     public function resetSecret(Request $request)
     {
         $user = User::find($request->input('id'));
@@ -60,9 +86,24 @@ class UserController extends Controller
             return;
         }
 
-        collect($request->input('filter'))->each(function ($filter) use ($builder) {
+        $filters = $request->input('filter');
+        if (!is_array($filters)) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['filter' => 'Invalid filter']);
+        }
+        collect($filters)->each(function ($filter) use ($builder) {
+            if (!is_array($filter) || !is_string($filter['id'] ?? null)) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['filter' => 'Invalid filter']);
+            }
             $field = $filter['id'];
-            $value = $filter['value'];
+            $value = $filter['value'] ?? null;
+            if (str_contains($field, '.')) {
+                [$relation, $relationField] = array_pad(explode('.', $field, 3), 3, null);
+                if (!in_array($relationField, self::RELATION_FILTERS[$relation] ?? [], true)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages(['filter' => 'Unsupported relation filter']);
+                }
+            } elseif (!in_array($field, ['total_used', 'group_ids'], true)) {
+                $this->safeUserColumn($field);
+            }
             $logic = strtolower($filter['logic'] ?? 'and');
 
             if ($logic === 'or') {
@@ -136,9 +177,16 @@ class UserController extends Controller
             return;
         }
 
-        collect($request->input('sort'))->each(function ($sort) use ($builder) {
-            $field = $sort['id'];
-            $direction = $sort['desc'] ? 'DESC' : 'ASC';
+        $sorts = $request->input('sort');
+        if (!is_array($sorts)) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['sort' => 'Invalid sort']);
+        }
+        collect($sorts)->each(function ($sort) use ($builder) {
+            if (!is_array($sort)) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['sort' => 'Invalid sort']);
+            }
+            $field = $this->safeUserColumn($sort['id'] ?? null);
+            $direction = !empty($sort['desc']) ? 'DESC' : 'ASC';
             $builder->orderBy($field, $direction);
         });
     }
@@ -597,7 +645,7 @@ class UserController extends Controller
 
         if ($scope === 'filtered') {
             // filtered: apply filters/sort
-            $builder->orderBy($sort, $sortType);
+            $builder->orderBy($this->safeUserColumn($sort), $sortType);
             $this->applyFiltersAndSorts($request, $builder);
         } elseif ($scope === 'selected') {
             $builder->whereIn('id', $userIds);
@@ -665,7 +713,7 @@ class UserController extends Controller
 
         if ($scope === 'filtered') {
             // filtered: keep current semantics
-            $builder->orderBy($sort, $sortType);
+            $builder->orderBy($this->safeUserColumn($sort), $sortType);
             $this->applyFiltersAndSorts($request, $builder);
         } elseif ($scope === 'selected') {
             $builder->whereIn('id', $userIds);
