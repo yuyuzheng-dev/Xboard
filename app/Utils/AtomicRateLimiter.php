@@ -6,7 +6,7 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * Lock-backed fixed-window counter for abuse controls. Cache increments alone are
+ * Lock-backed expiring counter for abuse controls. Cache increments alone are
  * read-modify-write operations on some stores (notably file/array), so protect them.
  */
 final class AtomicRateLimiter
@@ -14,7 +14,7 @@ final class AtomicRateLimiter
     public static function hit(string $key, int $limit, int $decaySeconds): bool
     {
         try {
-            return Cache::lock($key . ':__rate_limit_lock', 30)->block(2, function () use ($key, $limit, $decaySeconds): bool {
+            return Cache::lock('rate-limit-lock:' . hash('sha256', $key), 30)->block(2, function () use ($key, $limit, $decaySeconds): bool {
                 $count = (int) Cache::get($key, 0);
                 if ($count >= max(0, $limit)) {
                     return false;
