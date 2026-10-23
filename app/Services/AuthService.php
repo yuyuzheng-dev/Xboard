@@ -58,9 +58,15 @@ class AuthService
         
         $accessToken = PersonalAccessToken::findToken($token);
         
-        $tokenable = $accessToken?->tokenable;
-        
-        return $tokenable instanceof User ? $tokenable : null;
+        if (!$accessToken
+            || ($accessToken->expires_at && $accessToken->expires_at->isPast())
+            || (config('sanctum.expiration') && $accessToken->created_at
+                && $accessToken->created_at->copy()->addMinutes((int) config('sanctum.expiration'))->isPast())) {
+            return null;
+        }
+
+        $tokenable = $accessToken->tokenable;
+        return $tokenable instanceof User && !$tokenable->banned ? $tokenable : null;
     }
 
     /**

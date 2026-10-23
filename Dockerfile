@@ -59,7 +59,7 @@ COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
-RUN composer install --no-cache --no-dev --no-security-blocking \
+RUN composer install --no-cache --no-dev --no-interaction \
     && php artisan storage:link \
     && chown -R www:www /www \
     && chmod -R 775 /www \

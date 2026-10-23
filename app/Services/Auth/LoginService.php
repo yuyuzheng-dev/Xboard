@@ -114,6 +114,9 @@ class LoginService
             return [false, [500, __('Reset failed')]];
         }
 
+        // Password reset must invalidate previously issued Sanctum access tokens.
+        $user->tokens()->delete();
+
         HookManager::call('user.password.reset.after', $user);
 
         // 清除邮箱验证码

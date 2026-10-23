@@ -76,7 +76,27 @@ class PaymentService
         }
         if (!$this->config['enable'])
             throw new ApiException('gate is not enable');
+
+        // Never accept callbacks for an unconfigured/missing verification key.
+        $secretKey = match ($this->method) {
+            'EPay' => 'key',
+            'MGate' => 'mgate_app_secret',
+            'Coinbase' => 'coinbase_webhook_key',
+            'BTCPay' => 'btcpay_webhook_key',
+            'CoinPayments' => 'coinpayments_ipn_secret',
+            'AlipayF2F' => 'public_key',
+            default => null,
+        };
+        if ($secretKey !== null && (!is_string($this->config[$secretKey] ?? null)
+            || trim($this->config[$secretKey]) === '')) {
+            throw new ApiException('payment verification key is missing');
+        }
         return $this->payment->notify($params);
+    }
+
+    public function getPaymentId(): int
+    {
+        return (int) ($this->config['id'] ?? 0);
     }
 
     public function pay($order)

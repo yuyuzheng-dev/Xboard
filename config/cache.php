@@ -20,6 +20,9 @@ return [
 
     'default' => env('CACHE_DRIVER', 'file'),
 
+    // Use the Redis store in production; tests may isolate settings in memory.
+    'setting_store' => env('CACHE_SETTING_STORE', 'redis'),
+
     /*
     |--------------------------------------------------------------------------
     | Cache Stores
