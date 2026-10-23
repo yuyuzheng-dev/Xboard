@@ -14,6 +14,7 @@ use App\Utils\Dict;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class RegisterService
 {
@@ -112,6 +113,7 @@ class RegisterService
     {
         $inviteCodeModel = InviteCode::where('code', $inviteCode)
             ->where('status', InviteCode::STATUS_UNUSED)
+            ->lockForUpdate()
             ->first();
 
         if (!$inviteCodeModel) {
@@ -151,24 +153,20 @@ class RegisterService
         $password = $request->input('password');
         $inviteCode = $request->input('invite_code');
 
-        // 处理邀请码获取邀请人ID
-        $inviteUserId = null;
-        if ($inviteCode) {
-            $inviteUserId = $this->handleInviteCode($inviteCode);
-        }
-
-        // 创建用户
-        $userService = app(UserService::class);
-        $user = $userService->createUser([
-            'email' => $email,
-            'password' => $password,
-            'invite_user_id' => $inviteUserId,
-        ]);
-
-        // 保存用户
-        if (!$user->save()) {
-            return [false, [500, __('Register failed')]];
-        }
+        // A one-time invitation must be claimed and the user persisted atomically.
+        // The invite row lock stays held until the registration commits.
+        $user = DB::transaction(function () use ($email, $password, $inviteCode) {
+            $inviteUserId = $inviteCode ? $this->handleInviteCode($inviteCode) : null;
+            $user = app(UserService::class)->createUser([
+                'email' => $email,
+                'password' => $password,
+                'invite_user_id' => $inviteUserId,
+            ]);
+            if (!$user->save()) {
+                throw new ApiException(__('Register failed'));
+            }
+            return $user;
+        });
 
         HookManager::call('user.register.after', $user);
 
