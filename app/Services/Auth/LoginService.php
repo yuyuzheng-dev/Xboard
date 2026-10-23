@@ -44,6 +44,9 @@ class LoginService
         // 查找用户
         $user = User::byEmail($email)->first();
         if (!$user) {
+            if ($passwordLimitKey !== null) {
+                AtomicRateLimiter::release($passwordLimitKey);
+            }
             return [false, [400, __('Incorrect email or password')]];
         }
 
@@ -59,13 +62,14 @@ class LoginService
             return [false, [400, __('Incorrect email or password')]];
         }
 
+        // Only failed password checks should consume the password-error budget.
+        if ($passwordLimitKey !== null) {
+            AtomicRateLimiter::release($passwordLimitKey);
+        }
+
         // 检查账户状态
         if ($user->banned) {
             return [false, [400, __('Your account has been suspended')]];
-        }
-
-        if ($passwordLimitKey !== null) {
-            Cache::forget($passwordLimitKey);
         }
 
         // 更新最后登录时间
@@ -101,6 +105,7 @@ class LoginService
         // Keep the existing generic code error before checking account existence.
         $user = User::byEmail($email)->first();
         if (!$user) {
+            AtomicRateLimiter::release($forgetRequestLimitKey);
             return [false, [400, __('This email is not registered in the system')]];
         }
 
@@ -131,12 +136,18 @@ class LoginService
 
         if (!$result[0]) {
             if ($result[1] === 'save') {
+                AtomicRateLimiter::release($forgetRequestLimitKey);
                 return [false, [500, __('Reset failed')]];
+            }
+            if ($result[1] === 'missing') {
+                AtomicRateLimiter::release($forgetRequestLimitKey);
+                return [false, [400, __('This email is not registered in the system')]];
             }
             return [false, [400, __('Incorrect email verification code')]];
         }
 
-        Cache::forget($forgetRequestLimitKey);
+        // A valid reset attempt must not consume the failed-code attempt budget.
+        AtomicRateLimiter::release($forgetRequestLimitKey);
         HookManager::call('user.password.reset.after', $result[1]);
         return [true, true];
     }

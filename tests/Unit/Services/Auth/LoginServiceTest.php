@@ -65,9 +65,9 @@ class LoginServiceTest extends TestCase
             'password' => 'new-password',
             'email_code' => false,
         ], [
-            'email' => 'required|email:strict',
-            'password' => 'required|min:8',
-            'email_code' => 'required|digits:6',
+            'email' => 'required|string|email:strict',
+            'password' => 'required|string|min:8',
+            'email_code' => 'required|string|digits:6',
         ]);
 
         $this->assertTrue($validator->fails());
@@ -96,7 +96,7 @@ class LoginServiceTest extends TestCase
         $this->assertSame(2, (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $user->email)));
     }
 
-    public function test_successful_login_clears_password_attempt_counter(): void
+    public function test_successful_login_does_not_consume_password_error_budget(): void
     {
         admin_setting([
             'password_limit_enable' => 1,
@@ -109,7 +109,7 @@ class LoginServiceTest extends TestCase
         [$success] = $this->service->login($user->email, 'correct-password');
 
         $this->assertTrue($success);
-        $this->assertNull(Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $user->email)));
+        $this->assertSame(2, (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $user->email)));
     }
 
     private function createUser(string $email, string $password): User

@@ -111,18 +111,23 @@ class ThemeService
                 throw new Exception('Invalid theme package');
             }
 
-            ArchiveSafety::validate($zip);
+            try {
+                ArchiveSafety::validate($zip);
 
-            $configEntry = collect(range(0, $zip->numFiles - 1))
-                ->map(fn($i) => $zip->getNameIndex($i))
-                ->first(fn($name) => basename($name) === self::CONFIG_FILE);
+                $configEntry = collect(range(0, $zip->numFiles - 1))
+                    ->map(fn($i) => $zip->getNameIndex($i))
+                    ->first(fn($name) => basename($name) === self::CONFIG_FILE);
 
-            if (!$configEntry) {
-                throw new Exception('Theme config file not found');
+                if (!$configEntry) {
+                    throw new Exception('Theme config file not found');
+                }
+
+                if (!$zip->extractTo($tmpPath)) {
+                    throw new Exception('Theme package extraction failed');
+                }
+            } finally {
+                $zip->close();
             }
-
-            $zip->extractTo($tmpPath);
-            $zip->close();
 
             $sourcePath = $tmpPath . '/' . rtrim(dirname($configEntry), '.');
             $configFile = $sourcePath . '/' . self::CONFIG_FILE;
