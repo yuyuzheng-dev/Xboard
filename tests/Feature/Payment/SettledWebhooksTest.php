@@ -85,10 +85,18 @@ class SettledWebhooksTest extends TestCase
         return $plugin->notify([]);
     }
 
-    public function test_btcpay_requires_settled_event_and_settled_invoice(): void
+    public function test_btcpay_rejects_nonsettled_events(): void
     {
         $this->assertFalse($this->btcpay('InvoiceCreated', 'Settled'));
+    }
+
+    public function test_btcpay_rejects_nonsettled_invoices(): void
+    {
         $this->assertFalse($this->btcpay('InvoiceSettled', 'Processing'));
+    }
+
+    public function test_btcpay_accepts_settled_invoice_with_verified_amount(): void
+    {
         $result = $this->btcpay('InvoiceSettled', 'Settled');
         $this->assertIsArray($result);
         $this->assertSame(1230, $result['paid_amount']);
