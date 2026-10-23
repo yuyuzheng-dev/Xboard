@@ -71,9 +71,15 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         $str = http_build_query($params) . $this->getConfig('mgate_app_secret');
         $params['sign'] = md5($str);
 
+        $gatewayUrl = $this->getConfig('mgate_url');
+        if (!is_string($gatewayUrl) || !preg_match('/\Ahttps:\/\//i', $gatewayUrl)) {
+            throw new ApiException('MGate gateway must use HTTPS');
+        }
+
         $curl = new Curl();
         $curl->setUserAgent('MGate');
-        $curl->setOpt(CURLOPT_SSL_VERIFYPEER, 0);
+        $curl->setOpt(CURLOPT_SSL_VERIFYPEER, 1);
+        $curl->setOpt(CURLOPT_SSL_VERIFYHOST, 2);
         $curl->post($this->getConfig('mgate_url') . '/v1/gateway/fetch', http_build_query($params));
         $result = $curl->response;
 
