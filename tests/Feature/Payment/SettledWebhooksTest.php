@@ -7,11 +7,13 @@ use Illuminate\Support\Facades\Http;
 use Plugin\Coinbase\Plugin as CoinbasePlugin;
 use Plugin\Btcpay\Plugin as BTCPayPlugin;
 use Plugin\AlipayF2f\Plugin as AlipayPlugin;
+use Plugin\CoinPayments\Plugin as CoinPaymentsPlugin;
 use Tests\TestCase;
 
 require_once dirname(__DIR__, 3) . '/plugins-core/Coinbase/Plugin.php';
 require_once dirname(__DIR__, 3) . '/plugins-core/Btcpay/Plugin.php';
 require_once dirname(__DIR__, 3) . '/plugins-core/AlipayF2f/Plugin.php';
+require_once dirname(__DIR__, 3) . '/plugins-core/CoinPayments/Plugin.php';
 
 class SettledWebhooksTest extends TestCase
 {
@@ -100,6 +102,42 @@ class SettledWebhooksTest extends TestCase
         $result = $this->btcpay('InvoiceSettled', 'Settled');
         $this->assertIsArray($result);
         $this->assertSame(1230, $result['paid_amount']);
+    }
+
+    private function coinpayments(string $amount, string $currency = 'CNY'): array|string|bool
+    {
+        $params = [
+            'merchant' => 'merchant-1',
+            'status' => '100',
+            'item_number' => 'ORDER-1',
+            'txn_id' => 'CRYPTO-1',
+            'amount1' => $amount,
+            'currency1' => $currency,
+        ];
+        ksort($params);
+        $signature = hash_hmac('sha512', stripslashes(http_build_query($params)), 'shared-secret');
+        $this->fakeWebhook('coinpayments', 'Hmac', $signature);
+
+        $plugin = new CoinPaymentsPlugin('CoinPayments');
+        $plugin->setConfig([
+            'coinpayments_merchant_id' => 'merchant-1',
+            'coinpayments_currency' => 'CNY',
+            'coinpayments_ipn_secret' => 'shared-secret',
+        ]);
+        return $plugin->notify($params);
+    }
+
+    public function test_coinpayments_validates_merchant_currency_and_signed_amount(): void
+    {
+        $result = $this->coinpayments('12.30');
+        $this->assertIsArray($result);
+        $this->assertSame(1230, $result['paid_amount']);
+        $this->assertSame('ORDER-1', $result['trade_no']);
+    }
+
+    public function test_coinpayments_rejects_wrong_currency(): void
+    {
+        $this->assertFalse($this->coinpayments('12.30', 'USD'));
     }
 
     public function test_alipay_rejects_wrong_application_and_missing_amount(): void
