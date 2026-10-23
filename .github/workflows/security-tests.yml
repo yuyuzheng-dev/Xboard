@@ -32,4 +32,4 @@ jobs:
           find app config plugins-core tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l > /tmp/php-syntax.txt
           tail -n 10 /tmp/php-syntax.txt
       - name: Regression tests
-        run: php artisan test --testsuite=Unit,Feature
+        run: ./vendor/bin/phpunit --testsuite Unit,Feature
