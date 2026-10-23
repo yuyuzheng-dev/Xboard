@@ -3,6 +3,9 @@
 namespace Tests\Unit\Services\Auth;
 
 use App\Services\Auth\RegisterService;
+use App\Exceptions\ApiException;
+use App\Models\User;
+use App\Models\InviteCode;
 use App\Utils\CacheKey;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -63,6 +66,41 @@ class RegisterServiceTest extends TestCase
 
         $this->assertTrue($success);
         $this->assertNull($result);
+    }
+
+    public function test_single_use_invite_cannot_register_multiple_accounts(): void
+    {
+        admin_setting(['email_verify' => 0, 'invite_force' => 1, 'invite_never_expire' => 0]);
+
+        $inviter = User::create([
+            'email' => 'inviter@example.com',
+            'password' => 'hashed',
+            'uuid' => 'inviter-uuid',
+            'token' => 'inviter-token',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $code = InviteCode::create([
+            'user_id' => $inviter->id,
+            'code' => 'INVITE01',
+            'status' => InviteCode::STATUS_UNUSED,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        [$ok, $newUser] = $this->service->register($this->makeRequest([
+            'invite_code' => 'INVITE01',
+        ]));
+        $this->assertTrue($ok);
+        $this->assertSame($inviter->id, $newUser->invite_user_id);
+        $this->assertSame(InviteCode::STATUS_USED, (int) $code->refresh()->status);
+
+        $this->expectException(ApiException::class);
+        $this->service->register($this->makeRequest([
+            'email' => 'second@example.com',
+            'invite_code' => 'INVITE01',
+        ]));
     }
 
     private function makeRequest(array $overrides = []): Request
