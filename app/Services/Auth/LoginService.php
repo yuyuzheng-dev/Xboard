@@ -6,6 +6,8 @@ use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use App\Utils\AtomicRateLimiter;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
 class LoginService
@@ -19,10 +21,14 @@ class LoginService
      */
     public function login(string $email, string $password): array
     {
-        // 检查密码错误限制
+        // Reserve the attempt atomically before password verification so parallel requests
+        // cannot all pass the same stale counter value.
+        $passwordLimitKey = null;
         if ((int) admin_setting('password_limit_enable', true)) {
-            $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
-            if ($passwordErrorCount >= (int) admin_setting('password_limit_count', 5)) {
+            $passwordLimitKey = CacheKey::get('PASSWORD_ERROR_LIMIT', $email);
+            $limit = (int) admin_setting('password_limit_count', 5);
+            $expireSeconds = max(1, (int) admin_setting('password_limit_expire', 60)) * 60;
+            if (!AtomicRateLimiter::hit($passwordLimitKey, $limit, $expireSeconds)) {
                 return [
                     false,
                     [
@@ -50,21 +56,16 @@ class LoginService
                 $user->password
             )
         ) {
-            // 增加密码错误计数
-            if ((int) admin_setting('password_limit_enable', true)) {
-                $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
-                Cache::put(
-                    CacheKey::get('PASSWORD_ERROR_LIMIT', $email),
-                    (int) $passwordErrorCount + 1,
-                    60 * (int) admin_setting('password_limit_expire', 60)
-                );
-            }
             return [false, [400, __('Incorrect email or password')]];
         }
 
         // 检查账户状态
         if ($user->banned) {
             return [false, [400, __('Your account has been suspended')]];
+        }
+
+        if ($passwordLimitKey !== null) {
+            Cache::forget($passwordLimitKey);
         }
 
         // 更新最后登录时间
@@ -85,43 +86,58 @@ class LoginService
      */
     public function resetPassword(string $email, string $emailCode, string $password): array
     {
-        // 检查重置请求限制
+        // Count reset attempts atomically. A valid code is rechecked while holding the user row lock.
         $forgetRequestLimitKey = CacheKey::get('FORGET_REQUEST_LIMIT', $email);
-        $forgetRequestLimit = (int) Cache::get($forgetRequestLimitKey);
-        if ($forgetRequestLimit >= 3) {
+        if (!AtomicRateLimiter::hit($forgetRequestLimitKey, 3, 300)) {
             return [false, [429, __('Reset failed, Please try again later')]];
         }
 
-        // 验证邮箱验证码
-        $cachedEmailCode = Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+        $emailCodeKey = CacheKey::get('EMAIL_VERIFY_CODE', $email);
+        $cachedEmailCode = Cache::get($emailCodeKey);
         if ($cachedEmailCode === null || !hash_equals((string) $cachedEmailCode, $emailCode)) {
-            Cache::put($forgetRequestLimitKey, $forgetRequestLimit ? $forgetRequestLimit + 1 : 1, 300);
             return [false, [400, __('Incorrect email verification code')]];
         }
 
-        // 查找用户
+        // Keep the existing generic code error before checking account existence.
         $user = User::byEmail($email)->first();
         if (!$user) {
             return [false, [400, __('This email is not registered in the system')]];
         }
 
-        // 更新密码
-        $user->password = password_hash($password, PASSWORD_DEFAULT);
-        $user->password_algo = NULL;
-        $user->password_salt = NULL;
+        $result = DB::transaction(function () use ($user, $email, $emailCode, $emailCodeKey, $password) {
+            $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
+            if (!$lockedUser) {
+                return [false, 'missing'];
+            }
 
-        if (!$user->save()) {
-            return [false, [500, __('Reset failed')]];
+            // Another concurrent reset may have consumed the same code while this request waited.
+            $currentCode = Cache::get($emailCodeKey);
+            if ($currentCode === null || !hash_equals((string) $currentCode, $emailCode)) {
+                return [false, 'code'];
+            }
+
+            $lockedUser->password = password_hash($password, PASSWORD_DEFAULT);
+            $lockedUser->password_algo = null;
+            $lockedUser->password_salt = null;
+            if (!$lockedUser->save()) {
+                return [false, 'save'];
+            }
+
+            // Revoke every old session in the same DB transaction as the password update.
+            $lockedUser->tokens()->delete();
+            Cache::forget($emailCodeKey);
+            return [true, $lockedUser];
+        });
+
+        if (!$result[0]) {
+            if ($result[1] === 'save') {
+                return [false, [500, __('Reset failed')]];
+            }
+            return [false, [400, __('Incorrect email verification code')]];
         }
 
-        // Password reset must invalidate previously issued Sanctum access tokens.
-        $user->tokens()->delete();
-
-        HookManager::call('user.password.reset.after', $user);
-
-        // 清除邮箱验证码
-        Cache::forget(CacheKey::get('EMAIL_VERIFY_CODE', $email));
-
+        Cache::forget($forgetRequestLimitKey);
+        HookManager::call('user.password.reset.after', $result[1]);
         return [true, true];
     }
 

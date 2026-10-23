@@ -16,11 +16,11 @@ class PaymentNotificationIntegrityTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function payment(): Payment
+    private function payment(string $method = 'EPay'): Payment
     {
         return Payment::create([
             'name' => 'test EPay',
-            'payment' => 'EPay',
+            'payment' => $method,
             'uuid' => 'callback-test-uuid',
             'enable' => true,
             'config' => ['key' => 'dummy', 'pid' => '123'],
@@ -65,18 +65,22 @@ class PaymentNotificationIntegrityTest extends TestCase
         ], $overrides));
     }
 
-    private function verify(Order $order, Payment $payment, array $overrides = []): bool
+    private function verify(Order $order, Payment $payment, array $overrides = [], string $method = 'EPay', bool $includePaidAmount = true): bool
     {
         $service = Mockery::mock(PaymentService::class);
-        $service->method = 'EPay';
+        $service->method = $method;
         $service->shouldReceive('getPaymentId')->andReturn($payment->id);
         $method = new \ReflectionMethod(PaymentController::class, 'handle');
 
-        return $method->invoke(new PaymentController(), array_merge([
+        $payload = array_merge([
             'trade_no' => $order->trade_no,
             'callback_no' => 'gateway-receipt-001',
             'paid_amount' => 1025,
-        ], $overrides), $service);
+        ], $overrides);
+        if (!$includePaidAmount) {
+            unset($payload['paid_amount']);
+        }
+        return $method->invoke(new PaymentController(), $payload, $service);
     }
 
     public function test_mismatched_payment_config_does_not_open_order(): void
@@ -94,6 +98,15 @@ class PaymentNotificationIntegrityTest extends TestCase
         $order = $this->order($payment);
 
         $this->assertFalse($this->verify($order, $payment, ['paid_amount' => 1000]));
+        $this->assertSame(Order::STATUS_PENDING, $order->refresh()->status);
+    }
+
+    public function test_mgate_callback_cannot_bypass_amount_check_by_omitting_paid_amount(): void
+    {
+        $payment = $this->payment('MGate');
+        $order = $this->order($payment);
+
+        $this->assertFalse($this->verify($order, $payment, [], 'MGate', false));
         $this->assertSame(Order::STATUS_PENDING, $order->refresh()->status);
     }
 

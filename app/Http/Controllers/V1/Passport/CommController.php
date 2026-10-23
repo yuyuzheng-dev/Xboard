@@ -40,25 +40,33 @@ class CommController extends Controller
             }
         }
 
-        if (Cache::get(CacheKey::get('LAST_SEND_EMAIL_VERIFY_TIMESTAMP', $email))) {
+        $lastSendKey = CacheKey::get('LAST_SEND_EMAIL_VERIFY_TIMESTAMP', $email);
+        if (!Cache::add($lastSendKey, time(), 60)) {
             return $this->fail([400, __('Email verification code has been sent, please request again later')]);
         }
-        $code = rand(100000, 999999);
+
+        $emailCodeKey = CacheKey::get('EMAIL_VERIFY_CODE', $email);
+        $code = random_int(100000, 999999);
         $subject = admin_setting('app_name', 'XBoard') . __('Email verification code');
 
-        SendEmailJob::dispatch([
-            'email' => $email,
-            'subject' => $subject,
-            'template_name' => 'verify',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
-                'code' => $code,
-                'url' => admin_setting('app_url')
-            ]
-        ]);
+        try {
+            Cache::put($emailCodeKey, $code, 300);
+            SendEmailJob::dispatch([
+                'email' => $email,
+                'subject' => $subject,
+                'template_name' => 'verify',
+                'template_value' => [
+                    'name' => admin_setting('app_name', 'XBoard'),
+                    'code' => $code,
+                    'url' => admin_setting('app_url')
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            Cache::forget($lastSendKey);
+            Cache::forget($emailCodeKey);
+            throw $e;
+        }
 
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', $email), $code, 300);
-        Cache::put(CacheKey::get('LAST_SEND_EMAIL_VERIFY_TIMESTAMP', $email), time(), 60);
         return $this->success(true);
     }
 

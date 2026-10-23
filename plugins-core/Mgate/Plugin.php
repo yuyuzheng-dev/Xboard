@@ -113,7 +113,10 @@ class Plugin extends AbstractPlugin implements PaymentInterface
     public function notify($params): array|bool
     {
         $secret = $this->getConfig('mgate_app_secret');
-        if (!is_string($secret) || trim($secret) === '' || !is_array($params)) {
+        $appId = $this->getConfig('mgate_app_id');
+        if (!is_string($secret) || trim($secret) === ''
+            || (!is_string($appId) && !is_int($appId)) || trim((string) $appId) === ''
+            || !is_array($params)) {
             return false;
         }
         foreach ($params as $value) {
@@ -121,16 +124,37 @@ class Plugin extends AbstractPlugin implements PaymentInterface
                 return false;
             }
         }
-        if (!is_string($params['sign'] ?? null)
+
+        $status = strtolower(trim((string) ($params['status'] ?? '')));
+        if (!in_array($status, ['paid', 'success', 'trade_success', '2'], true)
+            || (string) ($params['app_id'] ?? '') !== (string) $appId
+            || !is_string($params['sign'] ?? null)
             || !is_string($params['out_trade_no'] ?? null) || trim($params['out_trade_no']) === ''
             || !is_string($params['trade_no'] ?? null) || trim($params['trade_no']) === '') {
+            return false;
+        }
+
+        // MGate's total_amount is integer cents, not decimal yuan. It must be signed and
+        // returned to the common callback handler for exact order+fee comparison.
+        $amount = $params['total_amount'] ?? null;
+        if ((!is_string($amount) && !is_int($amount))
+            || !preg_match('/\A[1-9][0-9]{0,9}\z/D', (string) $amount)) {
+            return false;
+        }
+        $paidAmount = (int) $amount;
+        if ($paidAmount > 2147483647) {
+            return false;
+        }
+
+        $expectedCurrency = strtoupper(trim((string) ($this->getConfig('mgate_source_currency') ?: 'CNY')));
+        $currency = strtoupper(trim((string) ($params['source_currency'] ?? 'CNY')));
+        if ($currency !== $expectedCurrency) {
             return false;
         }
 
         $sign = $params['sign'];
         unset($params['sign']);
         ksort($params);
-        reset($params);
         $str = http_build_query($params) . $secret;
 
         if (!hash_equals(md5($str), $sign)) {
@@ -139,7 +163,8 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'paid_amount' => $paidAmount,
         ];
     }
 }

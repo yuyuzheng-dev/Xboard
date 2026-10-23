@@ -64,10 +64,10 @@ class Helper
         }
 
         $charsLen = count($chars) - 1;
-        shuffle($chars);
         $str = '';
         for ($i = 0; $i < $len; $i++) {
-            $str .= $chars[mt_rand(0, $charsLen)];
+            // random_int uses the operating-system CSPRNG and does not inherit mt_rand state across workers.
+            $str .= $chars[random_int(0, $charsLen)];
         }
         return $str;
     }

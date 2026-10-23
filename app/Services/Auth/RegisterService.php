@@ -10,6 +10,7 @@ use App\Services\CaptchaService;
 use App\Services\Plugin\HookManager;
 use App\Services\UserService;
 use App\Utils\CacheKey;
+use App\Utils\AtomicRateLimiter;
 use App\Utils\Dict;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -24,10 +25,10 @@ class RegisterService
      * @param Request $request 请求对象
      * @return array [是否通过, 错误消息]
      */
-    public function validateRegister(Request $request): array
+    public function validateRegister(Request $request, bool $checkIpRateLimit = true): array
     {
         // 检查IP注册限制
-        if ((int) admin_setting('register_limit_by_ip_enable', 0)) {
+        if ($checkIpRateLimit && (int) admin_setting('register_limit_by_ip_enable', 0)) {
             $registerCountByIP = Cache::get(CacheKey::get('REGISTER_IP_RATE_LIMIT', $request->ip())) ?? 0;
             if ((int) $registerCountByIP >= (int) admin_setting('register_limit_count', 3)) {
                 return [
@@ -123,6 +124,15 @@ class RegisterService
             return null;
         }
 
+        // A stale/orphaned code must not attach a deleted inviter ID to a new account.
+        if (!User::whereKey($inviteCodeModel->user_id)->exists()) {
+            if ((int) admin_setting('invite_force', 0)) {
+                throw new ApiException(__('Invalid invitation code'));
+            }
+            $inviteCodeModel->delete();
+            return null;
+        }
+
         if (!(int) admin_setting('invite_never_expire', 0)) {
             $inviteCodeModel->status = InviteCode::STATUS_USED;
             $inviteCodeModel->save();
@@ -141,32 +151,63 @@ class RegisterService
      */
     public function register(Request $request): array
     {
-        // 验证注册数据
-        [$valid, $error] = $this->validateRegister($request);
-        if (!$valid) {
-            return [false, $error];
+        $rateLimitKey = null;
+        $rateLimitEnabled = (int) admin_setting('register_limit_by_ip_enable', 0) === 1;
+        if ($rateLimitEnabled) {
+            $rateLimitKey = CacheKey::get('REGISTER_IP_RATE_LIMIT', $request->ip());
+            $limit = (int) admin_setting('register_limit_count', 3);
+            $expireSeconds = max(1, (int) admin_setting('register_limit_expire', 60)) * 60;
+            if (!AtomicRateLimiter::hit($rateLimitKey, $limit, $expireSeconds)) {
+                return [
+                    false,
+                    [
+                        429,
+                        __('Register frequently, please try again after :minute minute', [
+                            'minute' => admin_setting('register_limit_expire', 60)
+                        ])
+                    ]
+                ];
+            }
         }
 
-        HookManager::call('user.register.before', $request);
-
-        $email = $request->input('email');
-        $password = $request->input('password');
-        $inviteCode = $request->input('invite_code');
-
-        // A one-time invitation must be claimed and the user persisted atomically.
-        // The invite row lock stays held until the registration commits.
-        $user = DB::transaction(function () use ($email, $password, $inviteCode) {
-            $inviteUserId = $inviteCode ? $this->handleInviteCode($inviteCode) : null;
-            $user = app(UserService::class)->createUser([
-                'email' => $email,
-                'password' => $password,
-                'invite_user_id' => $inviteUserId,
-            ]);
-            if (!$user->save()) {
-                throw new ApiException(__('Register failed'));
+        $persisted = false;
+        try {
+            // The slot is reserved atomically above; avoid checking the same counter twice.
+            [$valid, $error] = $this->validateRegister($request, false);
+            if (!$valid) {
+                if ($rateLimitKey !== null) {
+                    AtomicRateLimiter::release($rateLimitKey);
+                }
+                return [false, $error];
             }
-            return $user;
-        });
+
+            HookManager::call('user.register.before', $request);
+
+            $email = $request->input('email');
+            $password = $request->input('password');
+            $inviteCode = $request->input('invite_code');
+
+            // A one-time invitation must be claimed and the user persisted atomically.
+            // The invite row lock stays held until the registration commits.
+            $user = DB::transaction(function () use ($email, $password, $inviteCode) {
+                $inviteUserId = $inviteCode ? $this->handleInviteCode($inviteCode) : null;
+                $user = app(UserService::class)->createUser([
+                    'email' => $email,
+                    'password' => $password,
+                    'invite_user_id' => $inviteUserId,
+                ]);
+                if (!$user->save()) {
+                    throw new ApiException(__('Register failed'));
+                }
+                return $user;
+            });
+            $persisted = true;
+        } catch (\Throwable $e) {
+            if ($rateLimitKey !== null && !$persisted) {
+                AtomicRateLimiter::release($rateLimitKey);
+            }
+            throw $e;
+        }
 
         HookManager::call('user.register.after', $user);
 
@@ -178,16 +219,6 @@ class RegisterService
         // 更新最近登录时间
         $user->last_login_at = time();
         $user->save();
-
-        // 更新IP注册计数
-        if ((int) admin_setting('register_limit_by_ip_enable', 0)) {
-            $registerCountByIP = Cache::get(CacheKey::get('REGISTER_IP_RATE_LIMIT', $request->ip())) ?? 0;
-            Cache::put(
-                CacheKey::get('REGISTER_IP_RATE_LIMIT', $request->ip()),
-                (int) $registerCountByIP + 1,
-                (int) admin_setting('register_limit_expire', 60) * 60
-            );
-        }
 
         return [true, $user];
     }

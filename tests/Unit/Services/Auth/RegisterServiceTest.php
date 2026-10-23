@@ -4,8 +4,8 @@ namespace Tests\Unit\Services\Auth;
 
 use App\Services\Auth\RegisterService;
 use App\Exceptions\ApiException;
-use App\Models\User;
 use App\Models\InviteCode;
+use App\Models\User;
 use App\Utils\CacheKey;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -99,6 +99,67 @@ class RegisterServiceTest extends TestCase
             'email' => 'second@example.com',
             'invite_code' => 'INVITE01',
         ]));
+    }
+
+    public function test_orphan_invite_code_cannot_attach_deleted_inviter(): void
+    {
+        admin_setting(['email_verify' => 0, 'invite_force' => 0]);
+
+        $code = new InviteCode();
+        $code->user_id = 999999;
+        $code->code = 'ORPHAN01';
+        $code->status = InviteCode::STATUS_UNUSED;
+        $code->pv = 0;
+        $code->created_at = time();
+        $code->updated_at = time();
+        $code->saveOrFail();
+
+        [$success, $user] = $this->service->register($this->makeRequest([
+            'email' => 'orphan-invitee@example.com',
+            'invite_code' => 'ORPHAN01',
+        ]));
+
+        $this->assertTrue($success);
+        $this->assertNull($user->invite_user_id);
+        $this->assertFalse(InviteCode::where('code', 'ORPHAN01')->exists());
+    }
+
+    public function test_ip_registration_limit_is_atomic_and_failed_validation_releases_slot(): void
+    {
+        admin_setting([
+            'email_verify' => 1,
+            'register_limit_by_ip_enable' => 1,
+            'register_limit_count' => 1,
+            'register_limit_expire' => 60,
+            'captcha_enable' => 0,
+            'invite_force' => 0,
+            'stop_register' => 0,
+        ]);
+
+        $request = $this->makeRequest([
+            'email' => 'rate-limited@example.com',
+            'email_code' => '123456',
+        ]);
+        $key = CacheKey::get('REGISTER_IP_RATE_LIMIT', $request->ip());
+
+        // Invalid validation must release its reservation.
+        [$invalidSuccess, $invalidError] = $this->service->register($request);
+        $this->assertFalse($invalidSuccess);
+        $this->assertSame(400, $invalidError[0]);
+        $this->assertSame(0, (int) Cache::get($key, 0));
+
+        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'rate-limited@example.com'), '123456', 300);
+        [$success] = $this->service->register($request);
+        $this->assertTrue($success);
+        $this->assertSame(1, (int) Cache::get($key));
+
+        [$blocked, $error] = $this->service->register($this->makeRequest([
+            'email' => 'second-rate-limited@example.com',
+            'email_code' => '123456',
+        ]));
+        $this->assertFalse($blocked);
+        $this->assertSame(429, $error[0]);
+        $this->assertSame(1, (int) Cache::get($key));
     }
 
     private function makeRequest(array $overrides = []): Request
