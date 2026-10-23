@@ -64,8 +64,12 @@ class PaymentController extends Controller
             }
 
             $expectedAmount = (int) $order->total_amount + (int) $order->handling_amount;
-            // EPay always reports signed paid_amount (integer cents).
-            if (($payment->payment === 'EPay' || array_key_exists('paid_amount', $verify))
+            // Every bundled gateway must return a signed, integer-cent amount. Do not let
+            // a plugin silently bypass the central underpayment check by omitting paid_amount.
+            $amountRequired = in_array($payment->payment, [
+                'EPay', 'MGate', 'Coinbase', 'BTCPay', 'CoinPayments', 'AlipayF2F',
+            ], true);
+            if (($amountRequired || array_key_exists('paid_amount', $verify))
                 && (!is_int($verify['paid_amount'] ?? null)
                     || $verify['paid_amount'] !== $expectedAmount)) {
                 return [false, null];

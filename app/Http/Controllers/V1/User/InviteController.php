@@ -10,6 +10,7 @@ use App\Models\CommissionLog;
 use App\Models\InviteCode;
 use App\Models\Order;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 
@@ -17,13 +18,44 @@ class InviteController extends Controller
 {
     public function save(Request $request)
     {
-        if (InviteCode::where('user_id', $request->user()->id)->where('status', 0)->count() >= admin_setting('invite_gen_limit', 5)) {
-            return $this->fail([400,__('The maximum number of creations has been reached')]);
+        $userId = (int) $request->user()->id;
+
+        // Serialize invite generation per user so parallel requests cannot bypass the configured limit.
+        $created = DB::transaction(function () use ($userId): bool {
+            $user = User::whereKey($userId)->lockForUpdate()->first();
+            if (!$user) {
+                throw new ApiException(__('The user does not exist'));
+            }
+
+            $limit = (int) admin_setting('invite_gen_limit', 5);
+            if (InviteCode::where('user_id', $userId)->where('status', InviteCode::STATUS_UNUSED)->count() >= $limit) {
+                return false;
+            }
+
+            // The database unique index is the final concurrency guard. insertOrIgnore lets a collision
+            // retry safely on MySQL, PostgreSQL, SQLite and SQL Server without aborting the transaction.
+            for ($attempt = 0; $attempt < 16; $attempt++) {
+                $code = Helper::randomChar(8);
+                $inserted = DB::table('v2_invite_code')->insertOrIgnore([
+                    'user_id' => $userId,
+                    'code' => $code,
+                    'status' => InviteCode::STATUS_UNUSED,
+                    'pv' => 0,
+                    'created_at' => time(),
+                    'updated_at' => time(),
+                ]);
+                if ($inserted > 0) {
+                    return true;
+                }
+            }
+
+            throw new ApiException(__('Invite code generation failed, please try again'));
+        });
+
+        if (!$created) {
+            return $this->fail([400, __('The maximum number of creations has been reached')]);
         }
-        $inviteCode = new InviteCode();
-        $inviteCode->user_id = $request->user()->id;
-        $inviteCode->code = Helper::randomChar(8);
-        return $this->success($inviteCode->save());
+        return $this->success(true);
     }
 
     public function details(Request $request)

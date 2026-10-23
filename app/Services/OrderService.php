@@ -326,13 +326,21 @@ class OrderService
     public function paid(string $callbackNo)
     {
         try {
-            [$order, $shouldDispatch] = DB::transaction(function () use ($callbackNo) {
+            [$order, $shouldDispatch, $accepted] = DB::transaction(function () use ($callbackNo) {
                 $order = $this->lockCurrentOrder();
                 if (!$order) {
                     throw new \RuntimeException('Order not found.');
                 }
                 if ((int) $order->status !== Order::STATUS_PENDING) {
-                    return [$order, false];
+                    // Idempotent only for the same receipt on an already-processing/completed order.
+                    // A stale free-checkout request must not report success after cancellation.
+                    $alreadyAccepted = in_array((int) $order->status, [
+                        Order::STATUS_PROCESSING,
+                        Order::STATUS_COMPLETED,
+                    ], true)
+                        && is_string($order->callback_no)
+                        && hash_equals($order->callback_no, $callbackNo);
+                    return [$order, false, $alreadyAccepted];
                 }
 
                 $order->status = Order::STATUS_PROCESSING;
@@ -342,10 +350,14 @@ class OrderService
                     throw new \RuntimeException('Failed to save order status.');
                 }
 
-                return [$order, true];
+                return [$order, true, true];
             });
 
             $this->order = $order;
+
+            if (!$accepted) {
+                return false;
+            }
 
             if ($shouldDispatch) {
                 OrderHandleJob::dispatchSync($order->trade_no);
