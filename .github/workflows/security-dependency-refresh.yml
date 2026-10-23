@@ -1,0 +1,39 @@
+name: Security dependency refresh (temporary)
+
+on:
+  push:
+    branches: ["security/harden-payment-auth-deps-20261023"]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: PHP 8.2 and Composer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, intl, pdo_sqlite, redis, pcntl, fileinfo, bcmath
+          coverage: none
+          tools: composer:v2
+      - name: Resolve all supported dependencies
+        run: composer update --no-install --no-scripts --prefer-dist --no-interaction --no-progress
+      - name: Show security audit of resolved production packages
+        if: success()
+        run: composer audit --locked --no-dev
+        continue-on-error: true
+      - name: Save refreshed lock file on security branch
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add composer.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "build(security): resolve and upgrade vulnerable Composer dependencies"
+            git push origin HEAD:security/harden-payment-auth-deps-20261023
+          fi
