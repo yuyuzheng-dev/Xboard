@@ -18,6 +18,17 @@ return new class extends Migration {
             return;
         }
 
+        // Remove orphan codes left by older bulk user-deletion paths before deduplicating.
+        if (Schema::hasTable('v2_user')) {
+            DB::table('v2_invite_code')
+                ->whereNotExists(function ($query) {
+                    $query->select(DB::raw(1))
+                        ->from('v2_user')
+                        ->whereColumn('v2_user.id', 'v2_invite_code.user_id');
+                })
+                ->delete();
+        }
+
         $driver = DB::connection()->getDriverName();
         switch ($driver) {
             case 'mysql':

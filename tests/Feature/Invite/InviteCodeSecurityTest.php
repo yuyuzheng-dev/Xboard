@@ -52,9 +52,11 @@ class InviteCodeSecurityTest extends TestCase
             $table->dropUnique('uk_invite_code');
         });
 
+        $firstOwner = $this->makeUser();
+        $secondOwner = $this->makeUser();
         DB::table('v2_invite_code')->insert([
             [
-                'user_id' => 10,
+                'user_id' => $firstOwner->id,
                 'code' => 'DUPLICATE',
                 'status' => 0,
                 'pv' => 2,
@@ -62,7 +64,7 @@ class InviteCodeSecurityTest extends TestCase
                 'updated_at' => time(),
             ],
             [
-                'user_id' => 20,
+                'user_id' => $secondOwner->id,
                 'code' => 'DUPLICATE',
                 'status' => 1,
                 'pv' => 3,
@@ -76,7 +78,7 @@ class InviteCodeSecurityTest extends TestCase
 
         $rows = DB::table('v2_invite_code')->where('code', 'DUPLICATE')->get();
         $this->assertCount(1, $rows);
-        $this->assertSame(10, (int) $rows[0]->user_id);
+        $this->assertSame($firstOwner->id, (int) $rows[0]->user_id);
         $this->assertSame(1, (int) $rows[0]->status);
         $this->assertSame(5, (int) $rows[0]->pv);
         $this->assertTrue(Schema::hasIndex('v2_invite_code', 'uk_invite_code', 'unique'));
