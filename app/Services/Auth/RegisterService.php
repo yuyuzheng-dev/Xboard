@@ -123,6 +123,15 @@ class RegisterService
             return null;
         }
 
+        // A stale/orphaned code must not attach a deleted inviter ID to a new account.
+        if (!User::whereKey($inviteCodeModel->user_id)->exists()) {
+            if ((int) admin_setting('invite_force', 0)) {
+                throw new ApiException(__('Invalid invitation code'));
+            }
+            $inviteCodeModel->delete();
+            return null;
+        }
+
         if (!(int) admin_setting('invite_never_expire', 0)) {
             $inviteCodeModel->status = InviteCode::STATUS_USED;
             $inviteCodeModel->save();

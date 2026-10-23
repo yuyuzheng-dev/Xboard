@@ -3,6 +3,7 @@
 namespace Tests\Unit\Services\Auth;
 
 use App\Services\Auth\RegisterService;
+use App\Models\InviteCode;
 use App\Exceptions\ApiException;
 use App\Models\User;
 use App\Models\InviteCode;
@@ -99,6 +100,29 @@ class RegisterServiceTest extends TestCase
             'email' => 'second@example.com',
             'invite_code' => 'INVITE01',
         ]));
+    }
+
+    public function test_orphan_invite_code_cannot_attach_deleted_inviter(): void
+    {
+        admin_setting(['email_verify' => 0, 'invite_force' => 0]);
+
+        $code = new InviteCode();
+        $code->user_id = 999999;
+        $code->code = 'ORPHAN01';
+        $code->status = InviteCode::STATUS_UNUSED;
+        $code->pv = 0;
+        $code->created_at = time();
+        $code->updated_at = time();
+        $code->saveOrFail();
+
+        [$success, $user] = $this->service->register($this->makeRequest([
+            'email' => 'orphan-invitee@example.com',
+            'invite_code' => 'ORPHAN01',
+        ]));
+
+        $this->assertTrue($success);
+        $this->assertNull($user->invite_user_id);
+        $this->assertFalse(InviteCode::where('code', 'ORPHAN01')->exists());
     }
 
     private function makeRequest(array $overrides = []): Request

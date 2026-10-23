@@ -115,6 +115,59 @@ class OrderServiceConcurrencyTest extends TestCase
         $this->assertSame(1, $code->usages()->count());
     }
 
+    public function test_repeated_zero_price_plan_changes_do_not_mint_balance(): void
+    {
+        admin_setting([
+            'surplus_enable' => 1,
+            'plan_change_enable' => 1,
+            'change_order_event_id' => 0,
+        ]);
+
+        $oldPlan = $this->makePlan([
+            'name' => 'Paid source plan',
+            'prices' => [Plan::PERIOD_MONTHLY => 100],
+        ]);
+        $user = $this->makeUser([
+            'balance' => 0,
+            'plan_id' => $oldPlan->id,
+            'expired_at' => time() + (30 * 86400),
+            'transfer_enable' => $oldPlan->transfer_enable * 1073741824,
+            'u' => 0,
+            'd' => 0,
+        ]);
+        $sourceOrder = $this->makeOrder($user, $oldPlan, [
+            'status' => Order::STATUS_COMPLETED,
+            'total_amount' => 10000,
+            'balance_amount' => 0,
+            'surplus_amount' => 0,
+            'surplus_credit' => 0,
+            'created_at' => time(),
+        ]);
+
+        $firstBalance = null;
+        for ($i = 0; $i < 5; $i++) {
+            $freePlan = $this->makePlan([
+                'name' => 'Zero price plan ' . $i,
+                'prices' => [Plan::PERIOD_MONTHLY => 0],
+            ]);
+            $order = OrderService::createFromRequest($user->fresh(), $freePlan, Plan::PERIOD_MONTHLY);
+            $this->assertSame(0, (int) $order->total_amount);
+            $this->assertGreaterThanOrEqual(0, (int) $order->surplus_credit);
+            $this->assertLessThanOrEqual(10000, (int) $order->surplus_credit);
+
+            $this->assertTrue((new OrderService($order))->paid($order->trade_no));
+            $user->refresh();
+
+            if ($i === 0) {
+                $firstBalance = $user->balance;
+                $this->assertLessThanOrEqual(10000, $firstBalance);
+                $this->assertSame(Order::STATUS_DISCOUNTED, $sourceOrder->refresh()->status);
+            } else {
+                $this->assertSame($firstBalance, $user->balance);
+            }
+        }
+    }
+
     public function test_paid_rejects_a_stale_zero_order_after_it_was_cancelled(): void
     {
         $user = $this->makeUser(['balance' => 0]);
