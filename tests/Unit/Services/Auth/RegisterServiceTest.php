@@ -3,10 +3,9 @@
 namespace Tests\Unit\Services\Auth;
 
 use App\Services\Auth\RegisterService;
-use App\Models\InviteCode;
 use App\Exceptions\ApiException;
-use App\Models\User;
 use App\Models\InviteCode;
+use App\Models\User;
 use App\Utils\CacheKey;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
