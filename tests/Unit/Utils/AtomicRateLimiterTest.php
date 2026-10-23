@@ -5,6 +5,7 @@ namespace Tests\Unit\Utils;
 use App\Utils\AtomicRateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class AtomicRateLimiterTest extends TestCase
@@ -34,6 +35,12 @@ class AtomicRateLimiterTest extends TestCase
     {
         if (!function_exists('pcntl_fork')) {
             $this->markTestSkipped('pcntl is required for the multi-process cache-lock test.');
+        }
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            // Forking a PHPUnit process with an active MySQL PDO connection causes the
+            // child destructor to invalidate the parent's connection; MySQL has its own
+            // integration suite for schema and transaction behavior.
+            $this->markTestSkipped('Multi-process cache stress runs in the SQLite job.');
         }
 
         $previousDriver = app('cache')->getDefaultDriver();
