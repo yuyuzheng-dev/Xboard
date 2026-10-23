@@ -5,6 +5,7 @@ namespace Plugin\Coinbase;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Utils\PaymentAmount;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -76,26 +77,42 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         ];
     }
 
-    public function notify($params): array
+    public function notify($params): array|bool
     {
-        $payload = trim(request()->getContent());
-        $json_param = json_decode($payload, true);
+        $payload = request()->getContent();
+        $signature = request()->header('X-Cc-Webhook-Signature', '');
+        $secret = $this->getConfig('coinbase_webhook_key');
 
-        $headerName = 'X-Cc-Webhook-Signature';
-        $headers = getallheaders();
-        $signatureHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
-        $computedSignature = \hash_hmac('sha256', $payload, $this->getConfig('coinbase_webhook_key'));
-
-        if (!$this->hashEqual($signatureHeader, $computedSignature)) {
-            throw new ApiException('HMAC signature does not match', 400);
+        if (!is_string($secret) || trim($secret) === ''
+            || !is_string($signature) || !hash_equals(
+                hash_hmac('sha256', $payload, $secret),
+                $signature
+            )) {
+            return false;
         }
 
-        $out_trade_no = $json_param['event']['data']['metadata']['outTradeNo'];
-        $pay_trade_no = $json_param['event']['id'];
-        
+        $event = json_decode($payload, true);
+        // A signed "created", "pending" or "failed" event is not a settled payment.
+        if (!is_array($event) || ($event['event']['type'] ?? null) !== 'charge:confirmed') {
+            return false;
+        }
+        $charge = $event['event']['data'] ?? null;
+        if (!is_array($charge)
+            || !is_string($charge['metadata']['outTradeNo'] ?? null)
+            || trim($charge['metadata']['outTradeNo']) === ''
+            || !is_string($charge['id'] ?? null) || trim($charge['id']) === ''
+            || ($charge['pricing']['local']['currency'] ?? null) !== 'CNY') {
+            return false;
+        }
+        $paidAmount = PaymentAmount::toCents($charge['pricing']['local']['amount'] ?? null);
+        if ($paidAmount === null || $paidAmount <= 0) {
+            return false;
+        }
+
         return [
-            'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'trade_no' => $charge['metadata']['outTradeNo'],
+            'callback_no' => $charge['id'],
+            'paid_amount' => $paidAmount,
         ];
     }
 
