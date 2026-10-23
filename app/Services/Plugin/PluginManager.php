@@ -535,20 +535,21 @@ class PluginManager
 
         $extractPath = $tmpPath . '/' . bin2hex(random_bytes(12));
         $zip = new \ZipArchive();
-        if ($zip->open($file->path()) !== true) {
-            throw new \RuntimeException('无法打开插件包文件');
-        }
 
         try {
-            ArchiveSafety::validate($zip);
-            if (!$zip->extractTo($extractPath)) {
-                throw new \RuntimeException('插件包解压失败');
+            if ($zip->open($file->path()) !== true) {
+                throw new \RuntimeException('无法打开插件包文件');
             }
-        } finally {
-            $zip->close();
-        }
 
-        try {
+            try {
+                ArchiveSafety::validate($zip);
+                if (!$zip->extractTo($extractPath)) {
+                    throw new \RuntimeException('插件包解压失败');
+                }
+            } finally {
+                $zip->close();
+            }
+
             $configFile = File::glob($extractPath . '/*/config.json');
             if (empty($configFile)) {
                 $configFile = File::glob($extractPath . '/config.json');
@@ -590,11 +591,6 @@ class PluginManager
         }
     }
 
-    /**
-     * Initializes all enabled plugins from the database.
-     * This method ensures that plugins are loaded, and their routes, views,
-     * and service providers are registered only once per request cycle.
-     */
     public function initializeEnabledPlugins(): void
     {
         if ($this->pluginsInitialized) {

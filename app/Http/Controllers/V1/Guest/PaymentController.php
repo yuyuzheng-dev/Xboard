@@ -52,7 +52,7 @@ class PaymentController extends Controller
 
         [$accepted, $paidOrder] = DB::transaction(function () use ($verify, $paymentService) {
             // Lock the payment configuration before checking for receipt reuse.
-            $payment = Payment::whereKey($paymentService->getPaymentId())->lockForUpdate()->first();
+            $payment = Payment::whereKey($paymentService->getPaymentId())->sharedLock()->first();
             if (!$payment || !$payment->enable || $payment->payment !== $paymentService->method) {
                 return [false, null];
             }

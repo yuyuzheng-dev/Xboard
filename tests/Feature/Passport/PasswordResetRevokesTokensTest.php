@@ -34,4 +34,33 @@ class PasswordResetRevokesTokensTest extends TestCase
         $this->assertSame(0, $user->tokens()->count());
         $this->assertNull(AuthService::findUserByBearerToken($token));
     }
+    public function test_forget_endpoint_rejects_non_string_codes_and_passwords(): void
+    {
+        $user = User::create([
+            'email' => 'validation-reset@example.com',
+            'password' => password_hash('old-password', PASSWORD_DEFAULT),
+            'uuid' => 'validation-reset-uuid',
+            'token' => 'validation-reset-token',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        foreach ([false, null, [], '12345', '1234567'] as $code) {
+            $this->postJson('/api/v1/passport/auth/forget', [
+                'email' => $user->email,
+                'password' => 'attacker-password',
+                'email_code' => $code,
+            ])->assertUnprocessable();
+        }
+
+        $this->postJson('/api/v1/passport/auth/forget', [
+            'email' => $user->email,
+            'password' => ['attacker-password'],
+            'email_code' => '123456',
+        ])->assertUnprocessable();
+
+        $user->refresh();
+        $this->assertTrue(password_verify('old-password', $user->password));
+    }
+
 }

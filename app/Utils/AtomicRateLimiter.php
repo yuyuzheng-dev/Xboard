@@ -11,10 +11,15 @@ use Illuminate\Support\Facades\Cache;
  */
 final class AtomicRateLimiter
 {
+    private static function lockName(string $key): string
+    {
+        return 'rate-limit-lock:' . hash('sha256', $key);
+    }
+
     public static function hit(string $key, int $limit, int $decaySeconds): bool
     {
         try {
-            return Cache::lock('rate-limit-lock:' . hash('sha256', $key), 30)->block(2, function () use ($key, $limit, $decaySeconds): bool {
+            return Cache::lock(self::lockName($key), 30)->block(2, function () use ($key, $limit, $decaySeconds): bool {
                 $count = (int) Cache::get($key, 0);
                 if ($count >= max(0, $limit)) {
                     return false;
@@ -32,7 +37,7 @@ final class AtomicRateLimiter
     public static function release(string $key): void
     {
         try {
-            Cache::lock($key . ':__rate_limit_lock', 30)->block(2, function () use ($key): void {
+            Cache::lock(self::lockName($key), 30)->block(2, function () use ($key): void {
                 if ((int) Cache::get($key, 0) > 0) {
                     Cache::decrement($key);
                 }
