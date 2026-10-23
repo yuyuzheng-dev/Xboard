@@ -2,34 +2,43 @@
 
 namespace App\Utils;
 
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * Atomic fixed-window counter for abuse controls. Requires a cache store that
- * supports atomic increment (Laravel's Redis, database, file and Memcached stores).
+ * Lock-backed fixed-window counter for abuse controls. Cache increments alone are
+ * read-modify-write operations on some stores (notably file/array), so protect them.
  */
 final class AtomicRateLimiter
 {
     public static function hit(string $key, int $limit, int $decaySeconds): bool
     {
-        Cache::add($key, 0, max(1, $decaySeconds));
-        $count = Cache::increment($key);
+        try {
+            return Cache::lock($key . ':__rate_limit_lock', 30)->block(2, function () use ($key, $limit, $decaySeconds): bool {
+                $count = (int) Cache::get($key, 0);
+                if ($count >= max(0, $limit)) {
+                    return false;
+                }
 
-        if (!is_numeric($count)) {
+                Cache::put($key, $count + 1, max(1, $decaySeconds));
+                return true;
+            });
+        } catch (LockTimeoutException $e) {
+            // Fail closed under lock contention rather than allow a rate-limit bypass.
             return false;
         }
-
-        if ((int) $count > max(0, $limit)) {
-            // Keep the counter at the limit so denied requests do not extend lockout.
-            Cache::decrement($key);
-            return false;
-        }
-
-        return true;
     }
 
     public static function release(string $key): void
     {
-        Cache::decrement($key);
+        try {
+            Cache::lock($key . ':__rate_limit_lock', 30)->block(2, function () use ($key): void {
+                if ((int) Cache::get($key, 0) > 0) {
+                    Cache::decrement($key);
+                }
+            });
+        } catch (LockTimeoutException $e) {
+            // A failed validation may temporarily consume a slot if the cache is contended.
+        }
     }
 }
