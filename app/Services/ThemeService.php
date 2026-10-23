@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Http\UploadedFile;
 use Exception;
 use ZipArchive;
+use App\Utils\ArchiveSafety;
 
 class ThemeService
 {
@@ -110,6 +111,8 @@ class ThemeService
                 throw new Exception('Invalid theme package');
             }
 
+            ArchiveSafety::validate($zip);
+
             $configEntry = collect(range(0, $zip->numFiles - 1))
                 ->map(fn($i) => $zip->getNameIndex($i))
                 ->first(fn($name) => basename($name) === self::CONFIG_FILE);
@@ -129,8 +132,8 @@ class ThemeService
             }
 
             $config = json_decode(File::get($configFile), true);
-            if (empty($config['name'])) {
-                throw new Exception('Theme name not configured');
+            if (!is_array($config) || !self::isValidThemeName($config['name'] ?? null)) {
+                throw new Exception('Invalid theme name');
             }
 
             if (in_array($config['name'], self::SYSTEM_THEMES)) {
@@ -226,6 +229,10 @@ class ThemeService
     public function delete(string $theme): bool
     {
         try {
+            if (!self::isValidThemeName($theme)) {
+                throw new Exception('Invalid theme name');
+            }
+
             if (in_array($theme, self::SYSTEM_THEMES)) {
                 throw new Exception('System theme cannot be deleted');
             }
@@ -261,8 +268,18 @@ class ThemeService
     /**
      * Get theme path
      */
+    public static function isValidThemeName(mixed $name): bool
+    {
+        return is_string($name)
+            && (bool) preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z/D', $name)
+            && !str_contains($name, '..');
+    }
+
     public function getThemePath(string $theme): ?string
     {
+        if (!self::isValidThemeName($theme)) {
+            return null;
+        }
         $systemPath = base_path(self::SYSTEM_THEME_DIR . $theme);
         if (File::exists($systemPath)) {
             return $systemPath;
@@ -340,6 +357,9 @@ class ThemeService
      */
     public function cleanupThemeFiles(string $theme): void
     {
+        if (!self::isValidThemeName($theme)) {
+            return;
+        }
         try {
             $publicThemePath = public_path('theme/' . $theme);
             if (File::exists($publicThemePath)) {

@@ -5,6 +5,8 @@ namespace Plugin\Btcpay;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Utils\PaymentAmount;
+use Illuminate\Support\Facades\Http;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -80,34 +82,58 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        $payload = trim(request()->getContent());
-        $headers = getallheaders();
-        $headerName = 'Btcpay-Sig';
-        $signraturHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
-        $json_param = json_decode($payload, true);
-
-        $computedSignature = "sha256=" . \hash_hmac('sha256', $payload, $this->getConfig('btcpay_webhook_key'));
-
-        if (!$this->hashEqual($signraturHeader, $computedSignature)) {
-            throw new ApiException('HMAC signature does not match', 400);
+        $payload = request()->getContent();
+        $signature = request()->header('Btcpay-Sig', '');
+        $secret = $this->getConfig('btcpay_webhook_key');
+        if (!is_string($secret) || trim($secret) === ''
+            || !is_string($signature)
+            || !hash_equals('sha256=' . hash_hmac('sha256', $payload, $secret), $signature)) {
+            return false;
         }
 
-        $context = stream_context_create(array(
-            'http' => array(
-                'method' => 'GET',
-                'header' => "Authorization:" . "token " . $this->getConfig('btcpay_api_key') . "\r\n"
-            )
-        ));
+        $event = json_decode($payload, true);
+        // Do not fulfill on InvoiceCreated/Processing/Expired/etc.
+        if (!is_array($event) || ($event['type'] ?? null) !== 'InvoiceSettled') {
+            return false;
+        }
+        $invoiceId = $event['invoiceId'] ?? null;
+        if (!is_string($invoiceId) || !preg_match('/\A[A-Za-z0-9_-]{1,128}\z/D', $invoiceId)) {
+            return false;
+        }
 
-        $invoiceDetail = file_get_contents($this->getConfig('btcpay_url') . 'api/v1/stores/' . $this->getConfig('btcpay_storeId') . '/invoices/' . $json_param['invoiceId'], false, $context);
-        $invoiceDetail = json_decode($invoiceDetail, true);
+        $baseUrl = $this->getConfig('btcpay_url');
+        $storeId = $this->getConfig('btcpay_storeId');
+        $apiKey = $this->getConfig('btcpay_api_key');
+        if (!is_string($baseUrl) || !preg_match('/\Ahttps:\/\//i', $baseUrl)
+            || !is_string($storeId) || !preg_match('/\A[A-Za-z0-9_-]{1,128}\z/D', $storeId)
+            || !is_string($apiKey) || trim($apiKey) === '') {
+            return false;
+        }
 
-        $out_trade_no = $invoiceDetail['metadata']["orderId"];
-        $pay_trade_no = $json_param['invoiceId'];
-        
+        $url = rtrim($baseUrl, '/') . '/api/v1/stores/' . $storeId . '/invoices/' . $invoiceId;
+        $response = Http::withHeaders(['Authorization' => 'token ' . $apiKey])
+            ->timeout(10)->get($url);
+        if (!$response->successful()) {
+            return false;
+        }
+        $invoice = $response->json();
+        if (!is_array($invoice) || ($invoice['id'] ?? null) !== $invoiceId
+            || ($invoice['status'] ?? null) !== 'Settled'
+            || !in_array($invoice['additionalStatus'] ?? 'None', ['None', 'PaidOver'], true)
+            || ($invoice['currency'] ?? null) !== 'CNY'
+            || !is_string($invoice['metadata']['orderId'] ?? null)
+            || trim($invoice['metadata']['orderId']) === '') {
+            return false;
+        }
+
+        $paidAmount = PaymentAmount::toCents($invoice['amount'] ?? null);
+        if ($paidAmount === null || $paidAmount <= 0) {
+            return false;
+        }
         return [
-            'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'trade_no' => $invoice['metadata']['orderId'],
+            'callback_no' => $invoiceId,
+            'paid_amount' => $paidAmount,
         ];
     }
 

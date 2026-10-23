@@ -5,6 +5,7 @@ namespace Plugin\AlipayF2f;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Utils\PaymentAmount;
 use Illuminate\Support\Facades\Log;
 use Plugin\AlipayF2f\library\AlipayF2F;
 
@@ -81,8 +82,20 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        if ($params['trade_status'] !== 'TRADE_SUCCESS')
+        if (!is_array($params) || ($params['trade_status'] ?? null) !== 'TRADE_SUCCESS'
+            || !is_string($params['app_id'] ?? null)
+            || (string) $params['app_id'] !== (string) $this->getConfig('app_id')
+            || !is_string($params['out_trade_no'] ?? null)
+            || trim($params['out_trade_no']) === ''
+            || !is_string($params['trade_no'] ?? null)
+            || trim($params['trade_no']) === '') {
             return false;
+        }
+
+        $paidAmount = PaymentAmount::toCents($params['total_amount'] ?? null);
+        if ($paidAmount === null || $paidAmount <= 0) {
+            return false;
+        }
 
         $gateway = new AlipayF2F();
         $gateway->setAppId($this->getConfig('app_id'));
@@ -90,15 +103,15 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         $gateway->setAlipayPublicKey($this->getConfig('public_key'));
 
         try {
-            if ($gateway->verify($params)) {
-                return [
-                    'trade_no' => $params['out_trade_no'],
-                    'callback_no' => $params['trade_no']
-                ];
-            } else {
+            if (!$gateway->verify($params)) {
                 return false;
             }
-        } catch (\Exception $e) {
+            return [
+                'trade_no' => $params['out_trade_no'],
+                'callback_no' => $params['trade_no'],
+                'paid_amount' => $paidAmount,
+            ];
+        } catch (\Throwable $e) {
             return false;
         }
     }

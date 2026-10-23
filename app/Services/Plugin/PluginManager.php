@@ -2,6 +2,8 @@
 
 namespace App\Services\Plugin;
 
+use App\Utils\ArchiveSafety;
+
 use App\Models\Plugin;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\DB;
@@ -529,67 +531,63 @@ class PluginManager
     public function upload($file): bool
     {
         $tmpPath = storage_path('tmp/plugins');
-        if (!File::exists($tmpPath)) {
-            File::makeDirectory($tmpPath, 0755, true);
-        }
+        File::ensureDirectoryExists($tmpPath, 0755, true);
 
-        $extractPath = $tmpPath . '/' . uniqid();
+        $extractPath = $tmpPath . '/' . bin2hex(random_bytes(12));
         $zip = new \ZipArchive();
-
         if ($zip->open($file->path()) !== true) {
-            throw new \Exception('无法打开插件包文件');
+            throw new \RuntimeException('无法打开插件包文件');
         }
 
-        $zip->extractTo($extractPath);
-        $zip->close();
-
-        $configFile = File::glob($extractPath . '/*/config.json');
-        if (empty($configFile)) {
-            $configFile = File::glob($extractPath . '/config.json');
-        }
-
-        if (empty($configFile)) {
-            File::deleteDirectory($extractPath);
-            throw new \Exception('插件包格式错误：缺少配置文件');
-        }
-
-        $pluginPath = dirname(reset($configFile));
-        $config = json_decode(File::get($pluginPath . '/config.json'), true);
-
-        if (!$this->validateConfig($config)) {
-            File::deleteDirectory($extractPath);
-            throw new \Exception('插件配置文件格式错误');
-        }
-
-        $targetPath = $this->getUserPluginPath($config['code']);
-        if (File::exists($targetPath)) {
-            $installedConfigPath = $targetPath . '/config.json';
-            if (!File::exists($installedConfigPath)) {
-                throw new \Exception('已安装插件缺少配置文件，无法判断是否可升级');
+        try {
+            ArchiveSafety::validate($zip);
+            if (!$zip->extractTo($extractPath)) {
+                throw new \RuntimeException('插件包解压失败');
             }
-            $installedConfig = json_decode(File::get($installedConfigPath), true);
+        } finally {
+            $zip->close();
+        }
 
-            $oldVersion = $installedConfig['version'] ?? null;
-            $newVersion = $config['version'] ?? null;
-            if (!$oldVersion || !$newVersion) {
-                throw new \Exception('插件缺少版本号，无法判断是否可升级');
-            }
-            if (version_compare($newVersion, $oldVersion, '<=')) {
-                throw new \Exception('上传插件版本不高于已安装版本，无法升级');
+        try {
+            $configFile = File::glob($extractPath . '/*/config.json');
+            if (empty($configFile)) {
+                $configFile = File::glob($extractPath . '/config.json');
             }
 
-            File::deleteDirectory($targetPath);
+            if (empty($configFile)) {
+                throw new \RuntimeException('插件包格式错误：缺少配置文件');
+            }
+            $pluginPath = dirname(reset($configFile));
+            $config = json_decode(File::get($pluginPath . '/config.json'), true);
+            if (!is_array($config) || !$this->validateConfig($config)) {
+                throw new \RuntimeException('插件配置文件格式错误');
+            }
+
+            $targetPath = $this->getUserPluginPath($config['code']);
+            if (File::exists($targetPath)) {
+                $installedConfigPath = $targetPath . '/config.json';
+                if (!File::exists($installedConfigPath)) {
+                    throw new \RuntimeException('已安装插件缺少配置文件，无法判断是否可升级');
+                }
+                $installedConfig = json_decode(File::get($installedConfigPath), true);
+                $oldVersion = $installedConfig['version'] ?? null;
+                $newVersion = $config['version'] ?? null;
+                if (!$oldVersion || !$newVersion || version_compare($newVersion, $oldVersion, '<=')) {
+                    throw new \RuntimeException('上传插件版本不高于已安装版本');
+                }
+                File::deleteDirectory($targetPath);
+            }
+
+            File::copyDirectory($pluginPath, $targetPath);
+            if (Plugin::where('code', $config['code'])->exists()) {
+                return $this->update($config['code']);
+            }
+            return true;
+        } finally {
+            if (File::exists($extractPath)) {
+                File::deleteDirectory($extractPath);
+            }
         }
-
-        File::copyDirectory($pluginPath, $targetPath);
-        File::deleteDirectory($pluginPath);
-        File::deleteDirectory($extractPath);
-
-        if (Plugin::where('code', $config['code'])->exists()) {
-            return $this->update($config['code']);
-        }
-
-        return true;
     }
 
     /**

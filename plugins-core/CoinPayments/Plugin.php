@@ -5,6 +5,7 @@ namespace Plugin\CoinPayments;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Utils\PaymentAmount;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -75,38 +76,66 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         ];
     }
 
-    public function notify($params): array|string
+    public function notify($params): array|string|bool
     {
-        if (!isset($params['merchant']) || $params['merchant'] != trim($this->getConfig('coinpayments_merchant_id'))) {
-            throw new ApiException('No or incorrect Merchant ID passed');
+        $secret = $this->getConfig('coinpayments_ipn_secret');
+        $merchant = $this->getConfig('coinpayments_merchant_id');
+        $currency = $this->getConfig('coinpayments_currency');
+
+        if (!is_array($params) || !is_string($secret) || trim($secret) === ''
+            || (!is_string($merchant) && !is_int($merchant)) || trim((string) $merchant) === ''
+            || !is_string($currency) || trim($currency) === ''
+            || (string) ($params['merchant'] ?? '') !== trim((string) $merchant)) {
+            return false;
         }
 
-        $headers = getallheaders();
+        foreach ($params as $value) {
+            if (!is_string($value) && !is_int($value)) {
+                return false;
+            }
+        }
+        $signature = request()->header('Hmac', '');
+        if (!is_string($signature) || $signature === '') {
+            return false;
+        }
 
         ksort($params);
-        reset($params);
-        $request = stripslashes(http_build_query($params));
-
-        $headerName = 'Hmac';
-        $signHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
-
-        $hmac = hash_hmac("sha512", $request, trim($this->getConfig('coinpayments_ipn_secret')));
-
-        if (!hash_equals($hmac, $signHeader)) {
-            throw new ApiException('HMAC signature does not match', 400);
+        $canonical = stripslashes(http_build_query($params));
+        if (!hash_equals(hash_hmac('sha512', $canonical, trim($secret)), $signature)) {
+            return false;
         }
 
-        $status = $params['status'];
-        if ($status >= 100 || $status == 2) {
-            return [
-                'trade_no' => $params['item_number'],
-                'callback_no' => $params['txn_id'],
-                'custom_result' => 'IPN OK'
-            ];
-        } else if ($status < 0) {
-            throw new ApiException('Payment Timed Out or Error');
-        } else {
+        $status = $params['status'] ?? null;
+        if (!is_numeric($status)) {
+            return false;
+        }
+        $status = (int) $status;
+        if ($status < 0) {
+            return false;
+        }
+        if ($status < 100 && $status !== 2) {
             return 'IPN OK: pending';
         }
+
+        if (!is_string($params['item_number'] ?? null)
+            || trim($params['item_number']) === ''
+            || !is_string($params['txn_id'] ?? null)
+            || trim($params['txn_id']) === ''
+            || strtoupper((string) ($params['currency1'] ?? '')) !== strtoupper(trim($currency))) {
+            return false;
+        }
+        // amount1 is the original merchant currency amount, amount2 is crypto.
+        // Never confuse the converted crypto amount with the actual invoice total.
+        $paidAmount = PaymentAmount::toCents($params['amount1'] ?? null);
+        if ($paidAmount === null || $paidAmount <= 0) {
+            return false;
+        }
+
+        return [
+            'trade_no' => $params['item_number'],
+            'callback_no' => $params['txn_id'],
+            'paid_amount' => $paidAmount,
+            'custom_result' => 'IPN OK',
+        ];
     }
-} 
+}
