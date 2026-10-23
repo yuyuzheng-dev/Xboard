@@ -5,6 +5,9 @@ namespace Tests\Unit\Payments;
 use PHPUnit\Framework\TestCase;
 use Plugin\Epay\Plugin;
 
+// Built-in plugins live in plugins-core until installed into the plugins directory.
+require_once dirname(__DIR__, 3) . '/plugins-core/Epay/Plugin.php';
+
 class EpayCallbackTest extends TestCase
 {
     private function signedParams(array $override = []): array
