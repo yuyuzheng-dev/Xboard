@@ -24,7 +24,7 @@ jobs:
       - name: Validate locked dependencies
         run: |
           composer validate --no-check-publish
-          composer audit --locked --no-dev
+          composer audit --locked
       - name: Install test dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: PHP syntax checks
