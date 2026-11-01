@@ -5,6 +5,7 @@ namespace App\Services\Auth;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Utils\CacheKey;
+use App\Utils\EmailIdentity;
 use App\Utils\Helper;
 use App\Utils\AtomicRateLimiter;
 use App\Services\Auth\EmailVerificationCode;
@@ -22,6 +23,7 @@ class LoginService
      */
     public function login(string $email, string $password): array
     {
+        $email = EmailIdentity::normalize($email);
         // Reserve the attempt atomically before password verification so parallel requests
         // cannot all pass the same stale counter value.
         $passwordLimitKey = null;
@@ -91,6 +93,7 @@ class LoginService
      */
     public function resetPassword(string $email, string $emailCode, string $password): array
     {
+        $email = EmailIdentity::normalize($email);
         // Count reset attempts atomically. A valid code is rechecked while holding the user row lock.
         $forgetRequestLimitKey = CacheKey::get('FORGET_REQUEST_LIMIT', $email);
         if (!AtomicRateLimiter::hit($forgetRequestLimitKey, 3, 300)) {
