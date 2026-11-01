@@ -3,6 +3,7 @@
 namespace Tests\Unit\Services\Auth;
 
 use App\Services\Auth\RegisterService;
+use App\Services\Auth\EmailVerificationCode;
 use App\Exceptions\ApiException;
 use App\Models\InviteCode;
 use App\Models\User;
@@ -58,7 +59,7 @@ class RegisterServiceTest extends TestCase
 
     public function test_validate_register_accepts_matching_cached_email_code(): void
     {
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'user@example.com'), 123456, 300);
+        $this->assertTrue(EmailVerificationCode::issue('user@example.com', 'register', '123456'));
 
         [$success, $result] = $this->service->validateRegister($this->makeRequest([
             'email_code' => '123456',
@@ -148,7 +149,7 @@ class RegisterServiceTest extends TestCase
         $this->assertSame(400, $invalidError[0]);
         $this->assertSame(0, (int) Cache::get($key, 0));
 
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'rate-limited@example.com'), '123456', 300);
+        $this->assertTrue(EmailVerificationCode::issue('rate-limited@example.com', 'register', '123456'));
         [$success] = $this->service->register($request);
         $this->assertTrue($success);
         $this->assertSame(1, (int) Cache::get($key));
@@ -160,6 +161,116 @@ class RegisterServiceTest extends TestCase
         $this->assertFalse($blocked);
         $this->assertSame(429, $error[0]);
         $this->assertSame(1, (int) Cache::get($key));
+    }
+
+    public function test_each_mailbox_has_only_five_failed_registration_code_attempts(): void
+    {
+        $email = 'victim@example.com';
+        $this->assertTrue(EmailVerificationCode::issue($email, 'register', '654321'));
+
+        for ($i = 0; $i < 4; $i++) {
+            $request = $this->makeRequest([
+                'email' => $email,
+                'email_code' => '000000',
+            ]);
+            $request->server->set('REMOTE_ADDR', '198.51.100.' . ($i + 1));
+            [$valid, $error] = $this->service->validateRegister($request);
+            $this->assertFalse($valid);
+            $this->assertSame(400, $error[0]);
+        }
+
+        [$valid] = $this->service->validateRegister($this->makeRequest([
+            'email' => $email,
+            'email_code' => '654321',
+        ]));
+        $this->assertTrue($valid, 'Four wrong guesses must not block a valid code.');
+
+        [$valid, $error] = $this->service->validateRegister($this->makeRequest([
+            'email' => $email,
+            'email_code' => '000000',
+        ]));
+        $this->assertFalse($valid);
+        $this->assertSame(429, $error[0]);
+        $this->assertNull(Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $email)));
+        $this->assertSame(5, (int) Cache::get(EmailVerificationCode::registrationFailuresKey($email)));
+
+        [$valid, $error] = $this->service->validateRegister($this->makeRequest([
+            'email' => $email,
+            'email_code' => '654321',
+        ]));
+        $this->assertFalse($valid);
+        $this->assertSame(429, $error[0]);
+        $this->assertFalse(EmailVerificationCode::issue($email, 'register', '111111'));
+    }
+
+    public function test_resending_code_cannot_reset_failed_attempt_budget(): void
+    {
+        $email = 'resend@example.com';
+        $this->assertTrue(EmailVerificationCode::issue($email, 'register', '111111'));
+
+        for ($i = 0; $i < 4; $i++) {
+            [$valid, $error] = $this->service->validateRegister($this->makeRequest([
+                'email' => $email,
+                'email_code' => '000000',
+            ]));
+            $this->assertFalse($valid);
+            $this->assertSame(400, $error[0]);
+        }
+
+        $this->assertTrue(EmailVerificationCode::issue($email, 'register', '222222'));
+        $this->assertSame(4, (int) Cache::get(EmailVerificationCode::registrationFailuresKey($email)));
+        [$valid, $error] = $this->service->validateRegister($this->makeRequest([
+            'email' => $email,
+            'email_code' => '000000',
+        ]));
+        $this->assertFalse($valid);
+        $this->assertSame(429, $error[0]);
+        $this->assertFalse(EmailVerificationCode::issue($email, 'register', '333333'));
+        Cache::forget(EmailVerificationCode::registrationFailuresKey($email));
+        $this->assertTrue(EmailVerificationCode::issue($email, 'register', '333333'));
+        [$valid] = $this->service->validateRegister($this->makeRequest([
+            'email' => $email,
+            'email_code' => '333333',
+        ]));
+        $this->assertTrue($valid);
+    }
+
+    public function test_newly_registered_account_cannot_reuse_email_otp(): void
+    {
+        $email = 'one-time@example.com';
+        $this->assertTrue(EmailVerificationCode::issue($email, 'register', '654321'));
+        [$success, $user] = $this->service->register($this->makeRequest([
+            'email' => $email,
+            'email_code' => '654321',
+        ]));
+
+        $this->assertTrue($success);
+        $this->assertSame($email, $user->email);
+        $this->assertSame('invalid', EmailVerificationCode::verify($email, 'register', '654321'));
+        $this->assertNull(Cache::get(EmailVerificationCode::registrationFailuresKey($email)));
+    }
+
+    public function test_password_reset_code_cannot_be_guessed_using_register_endpoint(): void
+    {
+        User::create([
+            'email' => 'existing@example.com',
+            'password' => 'old-password',
+            'uuid' => 'existing-verify-uuid',
+            'token' => 'existing-verify-token',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->assertTrue(EmailVerificationCode::issue('existing@example.com', 'reset', '123456'));
+        foreach (['000000', '123456'] as $code) {
+            [$valid, $error] = $this->service->validateRegister($this->makeRequest([
+                'email' => 'existing@example.com',
+                'email_code' => $code,
+            ]));
+            $this->assertFalse($valid);
+            $this->assertSame(400, $error[0]);
+        }
+        $this->assertSame('valid', EmailVerificationCode::verify('existing@example.com', 'reset', '123456'));
     }
 
     private function makeRequest(array $overrides = []): Request

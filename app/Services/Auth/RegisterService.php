@@ -94,7 +94,7 @@ class RegisterService
 
         if ((int) admin_setting('email_verify', 0)) {
             $emailCode = $request->input('email_code');
-            if (!is_string($emailCode) || !preg_match('/\\A[0-9]{6}\\z/D', $emailCode)) {
+            if (!is_string($emailCode) || !preg_match('/^[0-9]{6}$/D', $emailCode) {
                 return [false, [422, __('Email verification code cannot be empty')]];
             }
 
