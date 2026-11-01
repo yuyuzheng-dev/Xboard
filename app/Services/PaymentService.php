@@ -99,14 +99,36 @@ class PaymentService
         return (int) ($this->config['id'] ?? 0);
     }
 
+    /**
+     * Payment webhooks must never derive their destination from the incoming
+     * Host or X-Forwarded-Host headers. Use administrator-controlled settings.
+     */
+    public static function notifyBase(?string $override = null): string
+    {
+        $configured = $override !== null && trim($override) !== ''
+            ? $override : admin_setting('app_url', '');
+        if (!is_string($configured) || strlen($configured) > 2048) {
+            throw new ApiException('Invalid payment notification domain');
+        }
+        $parts = parse_url(trim($configured));
+        if (!is_array($parts) || !in_array(strtolower($parts['scheme'] ?? ''), ['https', 'http'], true)
+            || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['query']) || isset($parts['fragment'])
+            || !in_array($parts['path'] ?? '', ['', '/'], true)) {
+            throw new ApiException('Invalid payment notification domain');
+        }
+        return rtrim(trim($configured), '/');
+    }
+
+    public static function notifyUrl(string $method, string $uuid, ?string $override = null): string
+    {
+        return self::notifyBase($override) . '/api/v1/guest/payment/notify/'
+            . rawurlencode($method) . '/' . rawurlencode($uuid);
+    }
+
     public function pay($order)
     {
-        // custom notify domain name
-        $notifyUrl = url("/api/v1/guest/payment/notify/{$this->method}/{$this->config['uuid']}");
-        if ($this->config['notify_domain']) {
-            $parseUrl = parse_url($notifyUrl);
-            $notifyUrl = $this->config['notify_domain'] . $parseUrl['path'];
-        }
+        $notifyUrl = self::notifyUrl($this->method, $this->config['uuid'], $this->config['notify_domain'] ?? null);
 
         return $this->payment->pay([
             'notify_url' => $notifyUrl,

@@ -45,7 +45,8 @@ WORKDIR /www
 COPY .docker /
 
 ARG CACHEBUST=1
-ARG REPO_URL=https://github.com/cedar2025/Xboard
+ARG REPO_URL=https://github.com/yuyuzheng-dev/Xboard
+ARG SOURCE_SHA=
 ARG BRANCH_NAME=master
 
 RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}" && \
@@ -53,6 +54,7 @@ RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHE
     rm -rf .git && \
     git config --global --add safe.directory /www && \
     git clone --depth 1 --branch ${BRANCH_NAME} ${REPO_URL} . && \
+    if [ -n "${SOURCE_SHA}" ]; then test "$(git rev-parse HEAD)" = "${SOURCE_SHA}" || { echo "Source SHA mismatch; refusing a stale/unreviewed image build" >&2; exit 1; }; fi && \
     git submodule update --init --recursive --force
 
 COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

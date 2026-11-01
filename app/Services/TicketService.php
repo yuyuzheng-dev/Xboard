@@ -40,6 +40,12 @@ class TicketService
 
     public function replyByAdmin($ticketId, $message, $userId): void
     {
+        // Authorization belongs at the service boundary: it is used by both
+        // the HTTP admin controller and Telegram plugin callbacks.
+        $actor = User::find($userId);
+        if (!$actor || $actor->banned || !($actor->is_admin || $actor->is_staff)) {
+            throw new ApiException('Unauthorized administrator reply', 403);
+        }
         $ticket = Ticket::where('id', $ticketId)->first();
         if (!$ticket) {
             throw new ApiException('工单不存在');
