@@ -3,6 +3,7 @@
 namespace App\Services\Auth;
 
 use App\Utils\CacheKey;
+use App\Utils\EmailIdentity;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 
@@ -14,7 +15,7 @@ final class EmailVerificationCode
 
     private static function normalized(string $email): string
     {
-        return strtolower(trim($email));
+        return EmailIdentity::normalize($email);
     }
 
     private static function codeKey(string $email): string
