@@ -3,10 +3,13 @@ namespace Tests\Unit\Payments;
 
 use App\Exceptions\ApiException;
 use App\Services\PaymentService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class PaymentNotifyUrlTest extends TestCase
 {
+    use RefreshDatabase;
+
     public function test_callback_host_comes_from_config_not_request_host(): void
     {
         admin_setting(['app_url' => 'https://panel.example.com']);
