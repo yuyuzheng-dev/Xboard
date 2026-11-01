@@ -83,21 +83,26 @@ class RegisterService
             }
         }
 
-        // Existing accounts must not use registration to probe a password-reset OTP.
         $email = $request->input('email');
+        $emailVerificationEnabled = (int) admin_setting('email_verify', 0) !== 0;
+        $emailCode = $request->input('email_code');
+
+        // Format validation must run before the existing-account check so malformed
+        // OTP requests cannot be used as an account enumeration side channel.
+        if ($emailVerificationEnabled
+            && (!is_string($emailCode) || !preg_match('/^[0-9]{6}$/D', $emailCode))) {
+            return [false, [422, __('Email verification code cannot be empty')]];
+        }
+
+        // An existing mailbox's reset token must never be tested through registration.
         $exist = User::byEmail($email)->first();
         if ($exist) {
-            return (int) admin_setting('email_verify', 0)
+            return $emailVerificationEnabled
                 ? [false, [400, __('Incorrect email verification code')]]
                 : [false, [400201, __('Email already exists')]];
         }
 
-        if ((int) admin_setting('email_verify', 0)) {
-            $emailCode = $request->input('email_code');
-            if (!is_string($emailCode) || !preg_match('/^[0-9]{6}$/D', $emailCode)) {
-                return [false, [422, __('Email verification code cannot be empty')]];
-            }
-
+        if ($emailVerificationEnabled) {
             $verification = EmailVerificationCode::verify($email, 'register', $emailCode);
             if ($verification === 'blocked') {
                 return [false, [429, __('Email verification attempts exceeded; request a new code later')]];
