@@ -98,6 +98,16 @@ class User extends Authenticatable
         return $query->where('email', strtolower(trim($email)));
     }
 
+    /**
+     * A database's accent-insensitive email collation can match distinct mailbox identities.
+     * Compare the resolved row in PHP after the database lookup, using the same normalization
+     * performed by the email mutator. This is intentionally NOT accent-insensitive.
+     */
+    public function matchesEmailIdentity(string $email): bool
+    {
+        return hash_equals((string) $this->email, strtolower(trim($email)));
+    }
+
     // 获取邀请人信息
     public function invite_user(): BelongsTo
     {
