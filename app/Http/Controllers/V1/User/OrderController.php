@@ -117,6 +117,10 @@ class OrderController extends Controller
 
     public function checkout(Request $request)
     {
+        $request->validate([
+            'trade_no' => 'required|string|max:128',
+            'method' => 'nullable|integer',
+        ]);
         $tradeNo = $request->input('trade_no');
         $method = $request->input('method');
         $order = Order::where('trade_no', $tradeNo)
@@ -144,13 +148,12 @@ class OrderController extends Controller
             return $this->fail([400, __('Payment method is not available')]);
         }
         $paymentService = new PaymentService($payment->payment, $payment->id);
-        $order->handling_amount = NULL;
-        if ($payment->handling_fee_fixed || $payment->handling_fee_percent) {
-            $order->handling_amount = (int) round(($order->total_amount * ($payment->handling_fee_percent / 100)) + $payment->handling_fee_fixed);
+        // A competing checkout, cancellation or callback must not overwrite the
+        // selected gateway (or its fee) after a payment session has been issued.
+        $order = OrderService::reservePaymentForCheckout($request->user()->id, $tradeNo, $payment);
+        if (!$order) {
+            return $this->fail([400, __('Payment already initiated with another method or order is no longer pending')]);
         }
-        $order->payment_id = $method;
-        if (!$order->save())
-            return $this->fail([400, __('Request failed, please try again later')]);
         $result = $paymentService->pay([
             'trade_no' => $tradeNo,
             'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,
