@@ -9,6 +9,7 @@ use App\Models\InviteCode;
 use App\Models\User;
 use App\Services\CaptchaService;
 use App\Utils\CacheKey;
+use App\Utils\EmailIdentity;
 use App\Utils\Helper;
 use App\Services\Auth\EmailVerificationCode;
 use Illuminate\Http\Request;
@@ -26,7 +27,7 @@ class CommController extends Controller
             return $this->fail($captchaError);
         }
 
-        $email = $request->input('email');
+        $email = EmailIdentity::normalize($request->input('email'));
 
         // Bind every issued OTP to the exact mailbox and its intended operation.
         $matchedUser = User::byEmail($email)->first();
