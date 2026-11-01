@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\ApiException;
 use App\Jobs\OrderHandleJob;
 use App\Models\Order;
+use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\TrafficResetLog;
 use App\Models\User;
@@ -31,6 +32,44 @@ class OrderService
     public function __construct(Order $order)
     {
         $this->order = $order;
+    }
+
+    /**
+     * Bind a pending paid order to its first payment method while holding its DB
+     * row lock. Retries may use that same gateway, but cannot replace it while
+     * an earlier provider session can still send a valid callback.
+     *
+     * Do not perform external gateway HTTP calls while holding a DB transaction.
+     */
+    public static function reservePaymentForCheckout(int $userId, string $tradeNo, Payment $payment): ?Order
+    {
+        return DB::transaction(function () use ($userId, $tradeNo, $payment): ?Order {
+            $order = Order::where('trade_no', $tradeNo)
+                ->where('user_id', $userId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$order || (int) $order->status !== Order::STATUS_PENDING
+                || (int) $order->total_amount <= 0) {
+                return null;
+            }
+
+            if ($order->payment_id !== null) {
+                return (int) $order->payment_id === (int) $payment->id ? $order : null;
+            }
+
+            $order->handling_amount = null;
+            if ($payment->handling_fee_fixed || $payment->handling_fee_percent) {
+                $order->handling_amount = (int) round(
+                    ($order->total_amount * ($payment->handling_fee_percent / 100))
+                    + $payment->handling_fee_fixed
+                );
+            }
+            $order->payment_id = $payment->id;
+            $order->saveOrFail();
+
+            return $order;
+        });
     }
 
     private function lockCurrentOrder(): ?Order

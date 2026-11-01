@@ -89,9 +89,14 @@ class AuthController extends Controller
      */
     public function token2Login(Request $request)
     {
-        // 处理直接通过token重定向
-        if ($token = $request->input('token')) {
-            $redirect = '/#/login?verify=' . $token . '&redirect=' . ($request->input('redirect', 'dashboard'));
+        // Reject non-string credentials before passing them to a typed service.
+        $token = $request->input('token');
+        if ($token !== null && $token !== '') {
+            $target = $request->input('redirect', 'dashboard');
+            if (!is_string($token) || !is_string($target) || strlen($token) > 512) {
+                return response()->json(['message' => __('Invalid request')], 400);
+            }
+            $redirect = '/#/login?verify=' . rawurlencode($token) . '&redirect=' . rawurlencode($target);
 
             return redirect()->to(
                 admin_setting('app_url')
@@ -101,7 +106,11 @@ class AuthController extends Controller
         }
 
         // 处理通过验证码登录
-        if ($verify = $request->input('verify')) {
+        $verify = $request->input('verify');
+        if ($verify !== null && $verify !== '') {
+            if (!is_string($verify)) {
+                return response()->json(['message' => __('Invalid request')], 400);
+            }
             $userId = $this->mailLinkService->handleTokenLogin($verify);
 
             if (!$userId) {
