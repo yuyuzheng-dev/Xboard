@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Models\GiftCardCode;
 use App\Models\GiftCardTemplate;
 use App\Models\Order;
+use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\GiftCardService;
@@ -227,6 +228,82 @@ class OrderServiceConcurrencyTest extends TestCase
         $response->assertStatus(400);
         $this->assertSame(Order::STATUS_PENDING, Order::findOrFail($order->id)->status);
         $this->assertNull(User::findOrFail($user->id)->plan_id);
+    }
+
+    public function test_paid_checkout_keeps_original_gateway_and_fee_across_retries(): void
+    {
+        $user = $this->makeUser();
+        $order = $this->makeOrder($user, $this->makePlan(), [
+            'total_amount' => 2000,
+            'payment_id' => null,
+            'handling_amount' => null,
+        ]);
+        $first = $this->makePayment('EPay', [
+            'handling_fee_percent' => 10,
+            'handling_fee_fixed' => 25,
+        ]);
+        $other = $this->makePayment('MGate');
+
+        $bound = OrderService::reservePaymentForCheckout($user->id, $order->trade_no, $first);
+        $this->assertNotNull($bound);
+        $this->assertSame($first->id, (int) $bound->payment_id);
+        $this->assertSame(225, (int) $bound->handling_amount);
+
+        // A second checkout must not invalidate the callback URL already sent to the user.
+        $this->assertNull(OrderService::reservePaymentForCheckout($user->id, $order->trade_no, $other));
+        $this->assertSame($first->id, (int) $order->fresh()->payment_id);
+
+        // Even if fee settings change during a retry, the signed amount remains stable.
+        $first->handling_fee_percent = 40;
+        $first->saveOrFail();
+        $retried = OrderService::reservePaymentForCheckout($user->id, $order->trade_no, $first);
+        $this->assertNotNull($retried);
+        $this->assertSame(225, (int) $retried->handling_amount);
+        $this->assertSame(Order::STATUS_PENDING, (int) $retried->status);
+    }
+
+    public function test_checkout_reservation_checks_owner_and_current_status_under_lock(): void
+    {
+        $user = $this->makeUser();
+        $order = $this->makeOrder($user, $this->makePlan(), ['total_amount' => 1000]);
+        $payment = $this->makePayment('EPay');
+
+        $this->assertNull(OrderService::reservePaymentForCheckout($user->id + 999, $order->trade_no, $payment));
+        $this->assertNull($order->fresh()->payment_id);
+
+        $order->status = Order::STATUS_CANCELLED;
+        $order->saveOrFail();
+
+        $this->assertNull(OrderService::reservePaymentForCheckout($user->id, $order->trade_no, $payment));
+        $this->assertNull($order->fresh()->payment_id);
+    }
+
+    public function test_checkout_reservation_rejects_free_or_invalid_order_amounts(): void
+    {
+        $user = $this->makeUser();
+        $plan = $this->makePlan();
+        $payment = $this->makePayment('EPay');
+
+        foreach ([0, -1] as $amount) {
+            $order = $this->makeOrder($user, $plan, ['total_amount' => $amount]);
+            $this->assertNull(OrderService::reservePaymentForCheckout($user->id, $order->trade_no, $payment));
+            $this->assertNull($order->fresh()->payment_id);
+        }
+    }
+
+    private function makePayment(string $method, array $overrides = []): Payment
+    {
+        return Payment::create(array_merge([
+            'name' => $method . ' checkout test',
+            'payment' => $method,
+            'uuid' => uniqid('checkout_', true),
+            'enable' => true,
+            'config' => [],
+            'handling_fee_percent' => 0,
+            'handling_fee_fixed' => 0,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ], $overrides));
     }
 
     private function makeUser(array $overrides = []): User
