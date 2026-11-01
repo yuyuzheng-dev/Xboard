@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\CaptchaService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use App\Services\Auth\EmailVerificationCode;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -27,10 +28,13 @@ class CommController extends Controller
 
         $email = $request->input('email');
 
+        // Bind every issued OTP to the exact mailbox and its intended operation.
+        $matchedUser = User::byEmail($email)->first();
+        $isRegisteredEmail = $matchedUser && $matchedUser->matchesEmailIdentity($email);
+        $purpose = $isRegisteredEmail ? 'reset' : 'register';
+
         // 检查白名单后缀限制
         if ((int) admin_setting('email_whitelist_enable', 0)) {
-            $matchedUser = User::byEmail($email)->first();
-            $isRegisteredEmail = $matchedUser && $matchedUser->matchesEmailIdentity($email);
             if (!$isRegisteredEmail) {
                 $allowedSuffixes = Helper::getEmailSuffix();
                 $emailSuffix = substr(strrchr($email, '@'), 1);
@@ -46,12 +50,15 @@ class CommController extends Controller
             return $this->fail([400, __('Email verification code has been sent, please request again later')]);
         }
 
-        $emailCodeKey = CacheKey::get('EMAIL_VERIFY_CODE', $email);
-        $code = random_int(100000, 999999);
+        $code = (string) random_int(100000, 999999);
         $subject = admin_setting('app_name', 'XBoard') . __('Email verification code');
 
+        if (!EmailVerificationCode::issue($email, $purpose, $code)) {
+            Cache::forget($lastSendKey);
+            return $this->fail([429, __('Email verification attempts exceeded; request a new code later')]);
+        }
+
         try {
-            Cache::put($emailCodeKey, $code, 300);
             SendEmailJob::dispatch([
                 'email' => $email,
                 'subject' => $subject,
@@ -64,7 +71,7 @@ class CommController extends Controller
             ]);
         } catch (\Throwable $e) {
             Cache::forget($lastSendKey);
-            Cache::forget($emailCodeKey);
+            EmailVerificationCode::discard($email, $purpose, $code);
             throw $e;
         }
 
