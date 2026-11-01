@@ -105,7 +105,7 @@ class User extends Authenticatable
      */
     public function matchesEmailIdentity(string $email): bool
     {
-        return hash_equals((string) $this->email, strtolower(trim($email)));
+        return hash_equals(strtolower(trim((string) $this->email)), strtolower(trim($email)));
     }
 
     // 获取邀请人信息
