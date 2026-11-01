@@ -43,7 +43,7 @@ class LoginService
 
         // 查找用户
         $user = User::byEmail($email)->first();
-        if (!$user) {
+        if (!$user || !$user->matchesEmailIdentity($email)) {
             if ($passwordLimitKey !== null) {
                 AtomicRateLimiter::release($passwordLimitKey);
             }
@@ -104,14 +104,16 @@ class LoginService
 
         // Keep the existing generic code error before checking account existence.
         $user = User::byEmail($email)->first();
-        if (!$user) {
+        // The database collation may consider e.g. accented and unaccented addresses equal.
+        // Only the exact normalized mailbox may use an OTP issued to that address.
+        if (!$user || !$user->matchesEmailIdentity($email)) {
             AtomicRateLimiter::release($forgetRequestLimitKey);
             return [false, [400, __('This email is not registered in the system')]];
         }
 
         $result = DB::transaction(function () use ($user, $email, $emailCode, $emailCodeKey, $password) {
             $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
-            if (!$lockedUser) {
+            if (!$lockedUser || !$lockedUser->matchesEmailIdentity($email)) {
                 return [false, 'missing'];
             }
 

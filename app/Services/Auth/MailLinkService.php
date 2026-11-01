@@ -28,8 +28,8 @@ class MailLinkService
         }
 
         $user = User::byEmail($email)->first();
-        if (!$user) {
-            return [true, true]; // 成功但用户不存在，保护用户隐私
+        if (!$user || !$user->matchesEmailIdentity($email)) {
+            return [true, true]; // Do not mail a collated-but-different user's login link.
         }
 
         $code = Helper::guid();

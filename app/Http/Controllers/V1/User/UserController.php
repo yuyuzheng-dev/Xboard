@@ -191,7 +191,7 @@ class UserController extends Controller
 
     public function transfer(UserTransfer $request)
     {
-        $amount = $request->input('transfer_amount');
+        $amount = (int) $request->validated('transfer_amount');
         try {
             DB::transaction(function () use ($request, $amount) {
                 $user = User::lockForUpdate()->find($request->user()->id);
