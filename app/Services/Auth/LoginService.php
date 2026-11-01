@@ -7,6 +7,7 @@ use App\Services\Plugin\HookManager;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
 use App\Utils\AtomicRateLimiter;
+use App\Services\Auth\EmailVerificationCode;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
@@ -96,9 +97,8 @@ class LoginService
             return [false, [429, __('Reset failed, Please try again later')]];
         }
 
-        $emailCodeKey = CacheKey::get('EMAIL_VERIFY_CODE', $email);
-        $cachedEmailCode = Cache::get($emailCodeKey);
-        if ($cachedEmailCode === null || !hash_equals((string) $cachedEmailCode, $emailCode)) {
+        // A registration OTP is never accepted for password reset.
+        if (EmailVerificationCode::verify($email, 'reset', $emailCode) !== 'valid') {
             return [false, [400, __('Incorrect email verification code')]];
         }
 
@@ -111,15 +111,14 @@ class LoginService
             return [false, [400, __('This email is not registered in the system')]];
         }
 
-        $result = DB::transaction(function () use ($user, $email, $emailCode, $emailCodeKey, $password) {
+        $result = DB::transaction(function () use ($user, $email, $emailCode, $password) {
             $lockedUser = User::whereKey($user->id)->lockForUpdate()->first();
             if (!$lockedUser || !$lockedUser->matchesEmailIdentity($email)) {
                 return [false, 'missing'];
             }
 
             // Another concurrent reset may have consumed the same code while this request waited.
-            $currentCode = Cache::get($emailCodeKey);
-            if ($currentCode === null || !hash_equals((string) $currentCode, $emailCode)) {
+            if (EmailVerificationCode::verify($email, 'reset', $emailCode) !== 'valid') {
                 return [false, 'code'];
             }
 
@@ -132,7 +131,7 @@ class LoginService
 
             // Revoke every old session in the same DB transaction as the password update.
             $lockedUser->tokens()->delete();
-            Cache::forget($emailCodeKey);
+            EmailVerificationCode::consume($email, 'reset');
             return [true, $lockedUser];
         });
 

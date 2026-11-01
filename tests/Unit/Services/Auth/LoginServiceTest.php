@@ -4,6 +4,7 @@ namespace Tests\Unit\Services\Auth;
 
 use App\Models\User;
 use App\Services\Auth\LoginService;
+use App\Services\Auth\EmailVerificationCode;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -41,7 +42,7 @@ class LoginServiceTest extends TestCase
     public function test_reset_password_accepts_matching_cached_email_code(): void
     {
         $user = $this->createUser('user@example.com', 'old-password');
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', $user->email), 123456, 300);
+        $this->assertTrue(EmailVerificationCode::issue($user->email, 'reset', '123456'));
 
         [$success, $result] = $this->service->resetPassword($user->email, '123456', 'new-password');
 

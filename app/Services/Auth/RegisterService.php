@@ -11,6 +11,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\AtomicRateLimiter;
+use App\Services\Auth\EmailVerificationCode;
 use App\Utils\Dict;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -82,23 +83,33 @@ class RegisterService
             }
         }
 
-        // 检查邮箱验证
-        if ((int) admin_setting('email_verify', 0)) {
-            $emailCode = $request->input('email_code');
-            if (!is_scalar($emailCode) || !preg_match('/^\d{6}$/', (string) $emailCode)) {
-                return [false, [422, __('Email verification code cannot be empty')]];
-            }
+        $email = $request->input('email');
+        $emailVerificationEnabled = (int) admin_setting('email_verify', 0) !== 0;
+        $emailCode = $request->input('email_code');
 
-            $cachedEmailCode = Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $request->input('email')));
-            if ($cachedEmailCode === null || !hash_equals((string) $cachedEmailCode, (string) $emailCode)) {
-                return [false, [400, __('Incorrect email verification code')]];
-            }
+        // Format validation must run before the existing-account check so malformed
+        // OTP requests cannot be used as an account enumeration side channel.
+        if ($emailVerificationEnabled
+            && (!is_string($emailCode) || !preg_match('/^[0-9]{6}$/D', $emailCode))) {
+            return [false, [422, __('Email verification code cannot be empty')]];
         }
 
-        // 检查邮箱是否存在
-        $exist = User::byEmail($request->input('email'))->first();
+        // An existing mailbox's reset token must never be tested through registration.
+        $exist = User::byEmail($email)->first();
         if ($exist) {
-            return [false, [400201, __('Email already exists')]];
+            return $emailVerificationEnabled
+                ? [false, [400, __('Incorrect email verification code')]]
+                : [false, [400201, __('Email already exists')]];
+        }
+
+        if ($emailVerificationEnabled) {
+            $verification = EmailVerificationCode::verify($email, 'register', $emailCode);
+            if ($verification === 'blocked') {
+                return [false, [429, __('Email verification attempts exceeded; request a new code later')]];
+            }
+            if ($verification !== 'valid') {
+                return [false, [400, __('Incorrect email verification code')]];
+            }
         }
 
         return [true, null];
@@ -213,7 +224,7 @@ class RegisterService
 
         // 清除邮箱验证码
         if ((int) admin_setting('email_verify', 0)) {
-            Cache::forget(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+            EmailVerificationCode::consume($email, 'register');
         }
 
         // 更新最近登录时间

@@ -4,6 +4,7 @@ namespace Tests\Feature\Passport;
 
 use App\Models\User;
 use App\Services\Auth\LoginService;
+use App\Services\Auth\EmailVerificationCode;
 use App\Services\AuthService;
 use App\Utils\CacheKey;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -26,7 +27,7 @@ class PasswordResetRevokesTokensTest extends TestCase
         ]);
         $token = $user->createToken('old-device')->plainTextToken;
         $this->assertNotNull(AuthService::findUserByBearerToken($token));
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'reset@example.com'), '123456', 300);
+        $this->assertTrue(EmailVerificationCode::issue('reset@example.com', 'reset', '123456'));
 
         [$ok] = (new LoginService())->resetPassword('reset@example.com', '123456', 'new-secure-password');
 

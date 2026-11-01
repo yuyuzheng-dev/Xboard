@@ -5,6 +5,7 @@ namespace Tests\Feature\Passport;
 use App\Jobs\SendEmailJob;
 use App\Models\User;
 use App\Services\Auth\LoginService;
+use App\Services\Auth\EmailVerificationCode;
 use App\Services\Auth\MailLinkService;
 use App\Utils\CacheKey;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -48,7 +49,7 @@ class ExactEmailIdentityTest extends TestCase
         $this->assertFalse($user->matchesEmailIdentity('jose@example.com'));
 
         // MySQL accent-insensitive collations may resolve this to the victim row.
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'jose@example.com'), '123456', 300);
+        $this->assertTrue(EmailVerificationCode::issue('jose@example.com', 'reset', '123456'));
         [$success] = app(LoginService::class)->resetPassword('jose@example.com', '123456', 'attacker-password');
         $this->assertFalse($success);
         $this->assertTrue(password_verify('old-password', $user->fresh()->password));
@@ -68,7 +69,7 @@ class ExactEmailIdentityTest extends TestCase
     public function test_normalized_case_variants_still_reset_the_correct_user(): void
     {
         $user = $this->user('owner@example.com');
-        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'OWNER@example.com'), '654321', 300);
+        $this->assertTrue(EmailVerificationCode::issue('OWNER@example.com', 'reset', '654321'));
 
         [$success] = app(LoginService::class)->resetPassword('OWNER@example.com', '654321', 'changed-password');
 
