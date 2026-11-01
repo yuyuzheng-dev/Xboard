@@ -27,10 +27,11 @@ class PaymentController extends Controller
     {
         $payments = Payment::orderBy('sort', 'ASC')->get()->makeVisible('config');
         foreach ($payments as $k => $v) {
-            $notifyUrl = url("/api/v1/guest/payment/notify/{$v->payment}/{$v->uuid}");
-            if ($v->notify_domain) {
-                $parseUrl = parse_url($notifyUrl);
-                $notifyUrl = $v->notify_domain . $parseUrl['path'];
+            try {
+                $notifyUrl = PaymentService::notifyUrl($v->payment, $v->uuid, $v->notify_domain);
+            } catch (ApiException $e) {
+                // Preserve access to invalid legacy configurations for repair.
+                $notifyUrl = null;
             }
             $payments[$k]['notify_url'] = $notifyUrl;
         }
@@ -68,7 +69,7 @@ class PaymentController extends Controller
             'icon' => 'nullable',
             'payment' => 'required',
             'config' => 'required',
-            'notify_domain' => 'nullable|url',
+            'notify_domain' => 'nullable|string|url|max:2048',
             'handling_fee_fixed' => 'nullable|integer',
             'handling_fee_percent' => 'nullable|numeric|between:0,100'
         ], [
@@ -79,6 +80,11 @@ class PaymentController extends Controller
             'handling_fee_fixed.integer' => '固定手续费格式有误',
             'handling_fee_percent.between' => '百分比手续费范围须在0-100之间'
         ]);
+        try {
+            PaymentService::notifyBase($params['notify_domain'] ?? null);
+        } catch (ApiException $e) {
+            return $this->fail([422, '请配置有效的站点地址或支付通知域名']);
+        }
         if ($request->input('id')) {
             $payment = Payment::find($request->input('id'));
             if (!$payment)

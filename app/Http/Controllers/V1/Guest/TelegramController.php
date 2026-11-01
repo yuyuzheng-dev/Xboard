@@ -24,8 +24,13 @@ class TelegramController extends Controller
 
     public function webhook(Request $request): void
     {
-        $expectedToken = md5(admin_setting('telegram_bot_token'));
-        if ($request->input('access_token') !== $expectedToken) {
+        // Long-lived Octane workers may reuse this controller instance.
+        $this->msg = null;
+        $botToken = admin_setting('telegram_bot_token');
+        $accessToken = $request->input('access_token');
+        if (!is_string($botToken) || trim($botToken) === ''
+            || !is_string($accessToken)
+            || !hash_equals(md5($botToken), $accessToken)) {
             throw new ApiException('access_token is error', 401);
         }
 
@@ -75,7 +80,9 @@ class TelegramController extends Controller
 
     private function formatMessage(array $data): void
     {
-        if (!isset($data['message']['text']))
+        if (!is_string($data['message']['text'] ?? null)
+            || !is_array($data['message']['chat'] ?? null)
+            || !isset($data['message']['chat']['id'], $data['message']['chat']['type'], $data['message']['message_id']))
             return;
 
         $message = $data['message'];

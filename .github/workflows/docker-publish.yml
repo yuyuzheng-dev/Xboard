@@ -94,6 +94,7 @@ jobs:
             CACHEBUST=${{ github.sha }}
             REPO_URL=https://github.com/${{ github.repository }}
             BRANCH_NAME=${{ github.ref_name }}
+            SOURCE_SHA=${{ github.sha }}
           provenance: false
           outputs: type=registry,push=true
           allow: |

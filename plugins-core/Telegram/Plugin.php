@@ -274,14 +274,19 @@ class Plugin extends AbstractPlugin
     }
 
     $token = $this->extractTokenFromUrl($subscribeUrl);
-    if (!$token) {
+    if (!is_string($token) || $token === '' || strlen($token) > 512) {
       $this->sendMessage($msg, '订阅地址无效');
       return;
     }
 
     $user = User::where('token', $token)->first();
-    if (!$user) {
+    if (!$user || !hash_equals((string) $user->token, $token)) {
       $this->sendMessage($msg, '用户不存在');
+      return;
+    }
+
+    if ($user->banned || $user->is_admin || $user->is_staff) {
+      $this->sendMessage($msg, '此账号不可通过订阅链接绑定普通 Telegram 身份');
       return;
     }
 
@@ -303,11 +308,14 @@ class Plugin extends AbstractPlugin
   protected function extractTokenFromUrl(string $url): ?string
   {
     $parsedUrl = parse_url($url);
+    if (!is_array($parsedUrl)) {
+      return null;
+    }
 
     if (isset($parsedUrl['query'])) {
       parse_str($parsedUrl['query'], $query);
       if (isset($query['token'])) {
-        return $query['token'];
+        return is_string($query['token']) ? $query['token'] : null;
       }
     }
 
@@ -386,8 +394,15 @@ class Plugin extends AbstractPlugin
 
   public function handleTicketReply(object $msg, array $matches): void
   {
+    if (!$this->checkPrivateChat($msg)) {
+      return;
+    }
     $user = $this->getBoundUser($msg);
     if (!$user) {
+      return;
+    }
+    if ($user->banned || !($user->is_admin || $user->is_staff)) {
+      $this->sendMessage($msg, '无权执行管理操作');
       return;
     }
 
