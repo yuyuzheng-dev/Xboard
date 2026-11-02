@@ -19,7 +19,7 @@ class Client
 
         $user = User::where('token', $token)->first();
         // A DB collation may equate strings that are not identical bearer tokens.
-        if (!$user || !is_string($user->token) || !hash_equals($user->token, $token)) {
+        if (!$user || $user->banned || !is_string($user->token) || !hash_equals($user->token, $token)) {
             throw new ApiException('token is error', 403);
         }
 
